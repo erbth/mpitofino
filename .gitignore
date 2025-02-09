@@ -1,2 +1,5 @@
 # VIM's files
 *.swp
+
+# Emacs's files
+*~
