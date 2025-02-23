@@ -118,7 +118,8 @@ void ASICDriver::initial_setup()
 	check_bf_status(
 			attr->idleTableNotifyModeSet(
 				true,
-				bind_front(&ASICDriver::eth_switch_idle_cb, this),
+				bind(&ASICDriver::eth_switch_idle_cb, this,
+					placeholders::_1, placeholders::_2, placeholders::_3),
 				50, 50, 5000,
 				nullptr),
 			"Enable idle timeout callback");
@@ -148,7 +149,9 @@ void ASICDriver::initial_setup()
 	check_bf_status(
 			eth_switch_learn->bfRtLearnCallbackRegister(
 				session, dev_tgt,
-				bind_front(&ASICDriver::eth_switch_learn_cb, this),
+				bind(&ASICDriver::eth_switch_learn_cb, this,
+					placeholders::_1, placeholders::_2, placeholders::_3,
+					placeholders::_4, placeholders::_5),
 				nullptr),
 			"Failed to register learn callback");
 }

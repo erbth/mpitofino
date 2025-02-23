@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.13)
 
 project(mpitofino CXX)
 
-set(CMAKE_CXX_FLAGS "-std=gnu++20 -Wall -O3")
+set(CMAKE_CXX_FLAGS "-std=gnu++17 -Wall -O3")
 
 # Find required packages
 find_path(BFRT_INCLUDE_DIRS bf_rt/bf_rt.hpp REQUIRED

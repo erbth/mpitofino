@@ -19,18 +19,18 @@ struct EthernetHdr
 
 
 /* A comparison function S.t. MacAddr can be used in RB-tree maps */
-inline int operator<=>(const MacAddr& a, const MacAddr& b)
+inline int operator<(const MacAddr& a, const MacAddr& b)
 {
 	for (size_t i = 0; i < sizeof(a.addr); i++)
 	{
 		if (a.addr[i] < b.addr[i])
-			return -1;
+			return true;
 		else if (a.addr[i] > b.addr[i])
-			return 1;
+			return false;
 	}
 
 	/* Equality */
-	return 0;
+	return false;
 }
 
 /* to_string functions for datatypes */

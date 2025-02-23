@@ -55,7 +55,8 @@ PacketProcessor::PacketProcessor(StateRepository& st_repo, Epoll& epoll)
 
 		/* Add socket to epoll instance */
 		epoll.add_fd(com_fd.get_fd(), EPOLLIN | EPOLLHUP | EPOLLRDHUP,
-					 bind_front(&PacketProcessor::on_com_fd_data, this));
+					 bind(&PacketProcessor::on_com_fd_data, this,
+						 placeholders::_1, placeholders::_2));
 	}
 	catch (...)
 	{
