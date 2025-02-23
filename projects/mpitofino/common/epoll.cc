@@ -1,5 +1,6 @@
 /* This file was copied from sdfs, available from https://github.com/erbth/sdfs
- * under the MIT license. */
+ * under the MIT license. Modifications to this file were made (see git vcs for
+ * details) */
 #include <cstdio>
 #include <stdexcept>
 #include "utils.h"
@@ -19,8 +20,14 @@ Epoll::~Epoll()
 	{
 		if (epoll_ctl(wfd.get_fd(), EPOLL_CTL_DEL, fd, nullptr) < 0)
 		{
-			fprintf(stderr, "Failed to remove fd frome epoll instance "
+			/* Probably the fd has already been closed (be careful in such
+			 * situations because the fd may have been dup(2)'d; see man page)
+			 * */
+			if (errno != EBADF)
+			{
+				fprintf(stderr, "Failed to remove fd frome epoll instance "
 					"during destructor\n");
+			}
 		}
 	}
 }

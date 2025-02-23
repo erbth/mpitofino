@@ -5,6 +5,9 @@ struct my_ingress_headers_t {
 }
 
 struct my_ingress_metadata_t {
+	/* Same size as PortId_t */
+	bit<9> mac_moved;
+	PortId_t ingress_port;
 }
 
 

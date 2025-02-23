@@ -1,6 +1,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
+#include "common/epoll.h"
+#include "common/signalfd.h"
+#include "state_repository.h"
+#include "packet_processor.h"
+#include "asic_driver.h"
 
 using namespace std;
 
@@ -15,11 +20,28 @@ using namespace std;
 
 void main_exc()
 {
+	/* Initialize bfrt library */
+	//init_asic_driver_bfrt();
+
+	Epoll epoll;
+
 	/* Register signal handler */
+	bool running = true;
+
+	SignalFD sfd({SIGINT, SIGTERM}, epoll,
+				 [&running](int signo){ running = false; });
+
 
 	/* Create different components */
+	StateRepository state_repository;
+	PacketProcessor packet_processor(state_repository, epoll);
+	ASICDriver asic_driver(state_repository);
+
 
 	/* Main loop */
+	printf("mpitofino switch control plane daemon ready\n");
+	while (running)
+		epoll.process_events(-1);
 }
 
 
