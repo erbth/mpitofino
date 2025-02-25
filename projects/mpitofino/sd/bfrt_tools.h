@@ -138,6 +138,25 @@ std::unique_ptr<BfRtTableData> table_create_data_action(
 	return data;
 }
 
+/* Helper for older SDE versions */
+inline bf_status_t table_add_or_mod(
+		const BfRtTable& table,
+		const bfrt::BfRtSession& session,
+		const bf_rt_target_t& dev_tgt,
+		const BfRtTableKey& key,
+		const BfRtTableData& data)
+{
+	auto ret = table.tableEntryMod(session, dev_tgt, 0, key, data);
+	if (ret == BF_SUCCESS)
+		return ret;
+
+	/* Object not found is ok, in this case we simply need to add it */
+	if (ret != BF_OBJECT_NOT_FOUND)
+		return ret;
+
+	return table.tableEntryAdd(session, dev_tgt, key, data);
+}
+
 };
 
 #endif /* __BFRT_TOOLS_H */

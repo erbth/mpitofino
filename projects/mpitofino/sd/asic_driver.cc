@@ -184,9 +184,8 @@ bf_status_t ASICDriver::eth_switch_learn_cb(
 				"Failed to ingress port from digest");
 
 		/* Update src table */
-		bool is_added{};
-		check_bf_status(switching_table_src->tableEntryAddOrMod(
-					*session, dev_tgt, 0,
+		check_bf_status(table_add_or_mod(*switching_table_src,
+					*session, dev_tgt,
 					*table_create_key<uint8_t*>(
 						switching_table_src,
 						{"hdr.ethernet.src_addr", reinterpret_cast<uint8_t*>(&src_mac), sizeof(src_mac)}
@@ -196,14 +195,13 @@ bf_status_t ASICDriver::eth_switch_learn_cb(
 						"stsrc_known",
 						{"port", ingress_port},
 						{"$ENTRY_TTL", 5000}
-					),
-					&is_added
+					)
 				),
 				"Failed to add entry to switching_table_src");
 
 		/* Update switching table */
-		check_bf_status(switching_table->tableEntryAddOrMod(
-					*session, dev_tgt, 0,
+		check_bf_status(table_add_or_mod(*switching_table,
+					*session, dev_tgt,
 					*table_create_key<uint8_t*>(
 						switching_table,
 						{"hdr.ethernet.dst_addr", reinterpret_cast<uint8_t*>(&src_mac), sizeof(src_mac)}
@@ -212,8 +210,7 @@ bf_status_t ASICDriver::eth_switch_learn_cb(
 						switching_table,
 						"send",
 						{"port", ingress_port}
-					),
-					&is_added
+					)
 				),
 				"Failed to add entry to switching_table");
 	}
