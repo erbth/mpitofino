@@ -192,7 +192,7 @@ bf_status_t ASICDriver::eth_switch_learn_cb(
 					),
 					*table_create_data_action<uint64_t, uint64_t>(
 						switching_table_src,
-						"stsrc_known",
+						"Ingress.stsrc_known",
 						{"port", ingress_port},
 						{"$ENTRY_TTL", 5000}
 					)
@@ -208,7 +208,7 @@ bf_status_t ASICDriver::eth_switch_learn_cb(
 					),
 					*table_create_data_action<uint64_t>(
 						switching_table,
-						"send",
+						"Ingress.send",
 						{"port", ingress_port}
 					)
 				),

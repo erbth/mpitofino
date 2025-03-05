@@ -17,6 +17,6 @@ cmake $SDE/p4studio/ -DCMAKE_INSTALL_PREFIX=$SDE_INSTALL \
                      -DTOFINO=ON \
                      -DP4_PATH=$PWD/../mpitofino.p4
                      
-make mpitofino
+make
 make install
 ```
