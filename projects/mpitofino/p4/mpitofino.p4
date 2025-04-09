@@ -5,6 +5,8 @@
 
 #include "headers.p4"
 #include "types.p4"
+#include "collectives.p4"
+#include "collectives_distributor.p4"
 
 
 #define SWITCHING_TABLE_SIZE	65536
@@ -27,14 +29,60 @@ parser IngressParser(
 	}
 
 	state meta_init {
-		meta.mac_moved = 0;
+		meta.handled = 0;
 		meta.ingress_port = ig_intr_md.ingress_port;
+		meta.is_coll = 0;
 
-		transition parser_ethernet;
+		/* Collectives module's state */
+		meta.agg_unit = 65535;
+		meta.node_bitmap = {0, 0};
+		meta.full_bitmap = {0, 0};
+		meta.agg_is_clear = false;
+
+		meta.bridge_header.setValid();
+		meta.bridge_header.agg_unit = 65535;
+
+		transition parse_ethernet;
 	}
 
-	state parser_ethernet {
+	state parse_ethernet {
 		pkt.extract(hdr.ethernet);
+
+		transition select(hdr.ethernet.ether_type) {
+			ether_type_t.IPV4 : parse_ipv4;
+			default : accept;
+		}
+	}
+
+	state parse_ipv4 {
+		pkt.extract(hdr.ipv4);
+
+		transition select(hdr.ipv4.protocol) {
+			ipv4_protocol_t.UDP : parse_udp;
+			default : accept;
+		}
+	}
+
+	state parse_udp {
+		pkt.extract(hdr.udp);
+
+		transition select(hdr.udp.dst_port) {
+			0x4000 : parse_aggregate;
+			default : accept;
+		}
+	}
+
+	state parse_aggregate {
+		pkt.extract(hdr.aggregate);
+
+		transition select(ig_intr_md.ingress_port) {
+			68 : parse_aggregate_recirculated;  // pipe 0 recirculation port
+			default : accept;
+		}
+	}
+
+	state parse_aggregate_recirculated {
+		meta.agg_is_clear = true;
 
 		transition accept;
 	}
@@ -48,23 +96,38 @@ control Ingress(
 	inout ingress_intrinsic_metadata_for_deparser_t ig_dprsr_md,
 	inout ingress_intrinsic_metadata_for_tm_t ig_tm_md)
 {
+	/* Collectives module */
+	Collectives() collectives;
+
+
+	/* Ethernet Switch (to be factured out into a different submodule if
+	 * appropriate */
 	action send(PortId_t port) {
 		ig_tm_md.ucast_egress_port = port;
 	}
 
+	action flood() {
+		ig_tm_md.mcast_grp_a = MCAST_FLOOD;
+	}
+
 	action bcast() {
-		ig_tm_md.mcast_grp_a = 1;
+		ig_tm_md.mcast_grp_a = MCAST_BCAST;
 	}
 
 	action drop() {
 		ig_dprsr_md.drop_ctl = 1;
 	}
 
+	/* A packet for the collective data processing unit has been received */
+	action collective() {
+		meta.is_coll = 1;
+	}
+
 	table switching_table {
 		key = { hdr.ethernet.dst_addr : exact; }
-		actions = { send; bcast; drop; }
+		actions = { send; flood; bcast; drop; collective; }
 
-		default_action = bcast;
+		default_action = flood;
 		size = SWITCHING_TABLE_SIZE;
 	}
 
@@ -74,32 +137,33 @@ control Ingress(
 		ig_dprsr_md.digest_type = ETH_SWITCH_LEARN_DIGEST;
 	}
 
-	action stsrc_known(PortId_t port)
-	{
-		meta.mac_moved = port ^ ig_intr_md.ingress_port;
-	}
-
 	@idletime_precision(3)
 	table switching_table_src {
-		key = { hdr.ethernet.src_addr : exact; }
-		actions = { stsrc_known; stsrc_unknown; }
+		key = {
+			hdr.ethernet.src_addr : exact;
+			meta.ingress_port : exact;
+		}
+		actions = { NoAction; stsrc_unknown; }
 
 		default_action = stsrc_unknown;
 		size = SWITCHING_TABLE_SIZE;
 		idle_timeout = true;
 	}
 
+
 	apply {
 		if (hdr.ethernet.isValid())
 		{
+			/* Ethernet switch */
 			switching_table_src.apply();
-
-			/* If the MAC address moved, treat it as unknown */
-			if (meta.mac_moved != 0)
-				stsrc_unknown();
-
 			switching_table.apply();
+
+			if (meta.is_coll == 1 && hdr.udp.isValid()) {
+				collectives.apply(hdr, meta, ig_intr_md, ig_dprsr_md, ig_tm_md);
+			}
 		}
+
+		ig_tm_md.level1_exclusion_id = (bit<16>) ig_intr_md.ingress_port;
 	}
 }
 
@@ -126,6 +190,7 @@ control IngressDeparser(
 			});
 		}
 
+		pkt.emit(meta.bridge_header);
 		pkt.emit(hdr);
 	}
 }
@@ -140,6 +205,36 @@ parser EgressParser(
 {
 	state start {
 		pkt.extract(eg_intr_md);
+		pkt.extract(meta.bridge_header);
+
+		/* NOTE: An alternative implementation would be to not send all packet
+		 * headers through the TM for mpitofino-traffic, but only a small bridge
+		 * header. */
+
+		transition parse_ethernet;
+	}
+
+	state parse_ethernet {
+		pkt.extract(hdr.ethernet);
+
+		transition select(hdr.ethernet.ether_type) {
+			ether_type_t.IPV4 : parse_ipv4;
+			default : accept;
+		}
+	}
+
+	state parse_ipv4 {
+		pkt.extract(hdr.ipv4);
+
+		transition select(hdr.ipv4.protocol) {
+			ipv4_protocol_t.UDP : parse_udp;
+			default : accept;
+		}
+	}
+
+	state parse_udp {
+		pkt.extract(hdr.udp);
+
 		transition accept;
 	}
 }
@@ -152,7 +247,12 @@ control Egress(
 	inout egress_intrinsic_metadata_for_deparser_t eg_dprsr_md,
 	inout egress_intrinsic_metadata_for_output_port_t eg_oport_md)
 {
+	CollectivesDistributor() collectives_distributor;
+
 	apply {
+		if (meta.bridge_header.agg_unit != 65535) {
+			collectives_distributor.apply(hdr, meta, eg_intr_md);
+		}
 	}
 }
 

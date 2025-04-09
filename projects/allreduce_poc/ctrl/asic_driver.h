@@ -16,6 +16,11 @@ extern "C" {
 class ASICDriver final
 {
 protected:
+	/* Identifiers for multicast groups */
+	using MCAST_FLOOD = 1;  // All front panel ports, e.g. for no-switching-table-entry
+	using MCAST_BCAST = 2;  // All ports, including CPU, e.g. for ff:ff:ff:ff:ff:ff
+
+
 	/* bf_switchd config; strings must live as long as the context */
 	std::string sde_install;
 	std::string program_conf_file;

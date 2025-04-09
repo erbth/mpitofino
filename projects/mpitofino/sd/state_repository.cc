@@ -41,3 +41,19 @@ void StateRepository::unsubscribe_switching_table(subscription_t s)
 	if (i != subscribers_switching_table.end())
 		subscribers_switching_table.erase(i);
 }
+
+
+MacAddr StateRepository::get_base_mac_addr()
+{
+	return base_mac_addr;
+}
+
+MacAddr StateRepository::get_collectives_module_mac_addr()
+{
+	return base_mac_addr + 1024;
+}
+
+IPv4Addr StateRepository::get_collectives_module_ip_addr()
+{
+	return collectives_module_ip_addr;
+}

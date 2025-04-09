@@ -1,6 +1,7 @@
 #include <system_error>
 #include <stdexcept>
 #include "packet_processor.h"
+#include "packet_headers.h"
 
 extern "C" {
 #include <sys/socket.h>
@@ -95,7 +96,7 @@ void PacketProcessor::on_com_fd_data(int, uint32_t events)
 
 	if (ret == sizeof(buf))
 	{
-		fprintf(stderr, "Dropped too big packet\n");
+		fprintf(stderr, "Dropped too large packet\n");
 		return;
 	}
 
@@ -105,13 +106,108 @@ void PacketProcessor::on_com_fd_data(int, uint32_t events)
 		return;
 
 	/* Parse packet */
-	if (ret < 60)
+	parse_packet(buf, ret);
+}
+
+
+void PacketProcessor::parse_packet(const char* ptr, size_t size)
+{
+	if (size < 60)
 	{
-		fprintf(stderr, "Dropped too small packet (%zd octets)\n", ret);
+		fprintf(stderr, "Dropped too small packet (%zd octets)\n", size);
 		return;
 	}
 
-	auto& hdr = *reinterpret_cast<EthernetHdr*>(buf);
-	printf("Received packet on CPU interface: %s, size %zd\n",
-		   to_string(hdr).c_str(), ret);
+	auto& hdr = *reinterpret_cast<const EthernetHdr*>(ptr);
+	// printf("Received packet on CPU interface: %s, size %zd\n",
+	// 	   to_string(hdr).c_str(), size);
+
+	ptr += sizeof(hdr);
+	size -= sizeof(hdr);
+
+	switch (ntohs(hdr.type))
+	{
+	case (int) ether_type_t::ARP:
+		parse_packet_arp(hdr, ptr, size);
+		break;
+
+	default:
+		break;
+	}
+}
+
+void PacketProcessor::parse_packet_arp(
+		const EthernetHdr& src_eth_hdr, const char* ptr, size_t size)
+{
+	if (size < 28)
+	{
+		fprintf(stderr, "Received malformed ARP packet\n");
+		return;
+	}
+
+	auto& hdr = *reinterpret_cast<const ARPHdr*>(ptr);
+
+	auto op = ntohs(hdr.operation);
+	if (op == 1)
+	{
+		/* ARP request */
+		if (hdr.target_protocol_address == st_repo.get_collectives_module_ip_addr())
+		{
+			/* Reply */
+			char buf[128];
+			char* ptr = buf;
+
+			memset(buf, 0, sizeof(buf));
+
+			/* Control plane offload header */
+			//auto& cpo_hdr = *reinterpret_cast<CPOffloadHdr*>(ptr);
+			//ptr += sizeof(cpo_hdr);
+
+			/* Ethernet header */
+			auto& eth_hdr = *reinterpret_cast<EthernetHdr*>(ptr);
+			ptr += sizeof(eth_hdr);
+
+			eth_hdr.src = st_repo.get_collectives_module_mac_addr();
+			eth_hdr.dst = src_eth_hdr.src;
+			eth_hdr.type = htons((int) ether_type_t::ARP);
+
+			/* ARP header */
+			auto& arp_hdr = *reinterpret_cast<ARPHdr*>(ptr);
+			ptr += sizeof(arp_hdr);
+
+			arp_hdr.hardware_type = htons(1);
+			arp_hdr.protocol_type = htons(0x0800);
+			arp_hdr.hardware_address_length = 6;
+			arp_hdr.protocol_address_length = 4;
+			arp_hdr.operation = htons(2);
+			arp_hdr.sender_hardware_address = st_repo.get_collectives_module_mac_addr();
+			arp_hdr.sender_protocol_address = st_repo.get_collectives_module_ip_addr();
+			arp_hdr.target_hardware_address = hdr.sender_hardware_address;
+			arp_hdr.target_protocol_address = hdr.sender_protocol_address;
+
+			send_packet(buf, ptr - buf);
+		}
+	}
+	else if (op == 2)
+	{
+		/* ARP reply */
+	}
+}
+
+
+void PacketProcessor::send_packet(const char* ptr, size_t size)
+{
+	struct sockaddr_ll addr = {
+		.sll_family = AF_PACKET,
+		.sll_ifindex = int_idx
+	};
+
+	auto ret = sendto(com_fd.get_fd(), ptr, size,
+			0, (sockaddr*) &addr, sizeof(addr));
+
+	if (ret != (ssize_t) size)
+	{
+		fprintf(stderr, "Failed to send packet to dataplane\n");
+		return;
+	}
 }

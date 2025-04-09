@@ -2,6 +2,7 @@
 #define __ASIC_DRIVER_H
 
 #include <mutex>
+#include <tuple>
 #include <bf_rt/bf_rt.hpp>
 #include "state_repository.h"
 
@@ -16,7 +17,12 @@ extern "C" {
 class ASICDriver final
 {
 protected:
-	StateRepository& st_repo;
+	/* Identifiers for multicast groups */
+	static constexpr int  MCAST_FLOOD = 1;  // All front panel ports, e.g. for no-switching-table-entry
+	static constexpr int  MCAST_BCAST = 2;  // All ports, including CPU, e.g. for ff:ff:ff:ff:ff:ff
+
+
+	StateRepository& state_repo;
 
 	/* bf_switchd config; strings must live as long as the context */
 	std::string sde_install;
@@ -55,12 +61,21 @@ protected:
 			const bfrt::BfRtTableKey* key,
 			void* cookie);
 
+	void update_switching_table(
+			const MacAddr& addr,
+			const char* action,
+			uint64_t port);
+
+	void update_switching_table(
+			const MacAddr& addr,
+			const char* action);
+
 	/* Initialization */
 	void find_tables();
 	void initial_setup();
 
 public:
-	ASICDriver(StateRepository& st_repo);
+	ASICDriver(StateRepository& state_repo);
 };
 
 #endif /* __ASIC_DRIVER_H */

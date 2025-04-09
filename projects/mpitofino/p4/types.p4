@@ -1,18 +1,53 @@
 /* -*- P4_16 -*- */
 
+// Other definitions
+// Broadcast groups (match definitions in ASIC driver of the control plane)
+#define MCAST_FLOOD 1
+#define MCAST_BCAST 2
+
+
+struct node_bitmap_t {
+	bit<32> low;
+	bit<32> high;
+}
+
+
 struct my_ingress_headers_t {
 	ethernet_h	ethernet;
+	ipv4_h ipv4;
+	udp_h udp;
+	aggregate_h aggregate;
 }
 
 struct my_ingress_metadata_t {
-	/* Same size as PortId_t */
-	bit<9> mac_moved;
+	/* S.t. the ingress port will be available in the deparser. */
 	PortId_t ingress_port;
+	bit<1> handled;  // no further processing required
+	bit<1> is_coll;  // process packet with collectives unit
+
+	bit<16> agg_unit;
+	node_bitmap_t node_bitmap;
+	node_bitmap_t full_bitmap;
+	bool agg_is_clear;  // set on final recirculation before the result is sent
+
+	bridge_header_t bridge_header;
 }
 
 
 struct my_egress_headers_t {
+	ethernet_h	ethernet;
+	ipv4_h ipv4;
+	udp_h udp;
 }
 
 struct my_egress_metadata_t {
+	bridge_header_t bridge_header;
+}
+
+
+/* For aggregation */
+typedef bit<32> value_t;
+struct value_pair_t {
+	value_t low;
+	value_t high;
 }

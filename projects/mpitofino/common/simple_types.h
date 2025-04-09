@@ -1,14 +1,104 @@
 #ifndef __COMMON_SIMPLE_TYPES_H
 #define __COMMON_SIMPLE_TYPES_H
 
-#include <cstdio>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <regex>
+#include <stdexcept>
 #include <string>
 
 struct MacAddr
 {
-	uint8_t addr[6];
+	uint8_t addr[6]{};
+
+	inline MacAddr() = default;
+
+	inline MacAddr(std::string s)
+	{
+		const std::regex re("([0-9a-fA-F]{2}):([0-9a-fA-F]{2}):([0-9a-fA-F]{2}):([0-9a-fA-F]{2}):([0-9a-fA-F]{2}):([0-9a-fA-F]{2})");
+		std::smatch m;
+		if (!regex_match(s, m, re))
+			throw std::runtime_error("Invalid format for MAC address");
+
+		for (int i = 1; i <= 6; i++)
+		{
+			auto c1 = m[i].str()[0];
+			auto c2 = m[i].str()[1];
+
+			if (c1 >= 'a' && c1 <= 'f')
+				c1 -= 'a' - 0xa;
+			else if (c1 >= 'A' && c1 <= 'F')
+				c1 -= 'A' - 0xa;
+			else
+				c1 -= '0';
+
+			if (c2 >= 'a' && c2 <= 'f')
+				c2 -= 'a' - 0xa;
+			else if (c2 >= 'A' && c2 <= 'F')
+				c2 -= 'A' - 0xa;
+			else
+				c2 -= '0';
+
+			addr[i-1] = ((uint8_t) c1 << 4) | ((uint8_t) c2);
+		}
+	}
+
+	/* Useful for deriving MAC addresses */
+	inline MacAddr operator+(unsigned offset)
+	{
+		MacAddr n = *this;
+
+		unsigned carry = 0;
+		for (int i = 5; i >= 0; i--)
+		{
+			unsigned v = offset & 0xff;
+			offset >>= 8;
+
+			v += carry + n.addr[i];
+			n.addr[i] = v & 0xff;
+
+			carry = v >> 8;
+		}
+
+		return n;
+	}
+
 } __attribute__((__packed__));
+
+/* Make sure that there's no vtable or anything s.t. type punning works as
+ * expected */
+static_assert(sizeof(MacAddr) == 6);
+
+struct IPv4Addr
+{
+	uint8_t addr[4]{};
+
+	inline IPv4Addr() = default;
+
+	inline IPv4Addr(std::string s)
+	{
+		const std::regex re("([0-9]{1,3}).([0-9]{1,3}).([0-9]{1,3}).([0-9]{1,3})");
+		std::smatch m;
+		if (!regex_match(s, m, re))
+			throw std::runtime_error("Invalid format for IPv4 address");
+
+		for (int i = 1; i <= 4; i++)
+		{
+			auto v = atoi(m[i].str().c_str());
+			if (v < 0 || v > 255)
+				throw std::runtime_error("Invalid format for IPv4 address");
+
+			addr[i-1] = v;
+		}
+	}
+
+	inline bool operator==(const IPv4Addr& o) const
+	{
+		return memcmp(addr, o.addr, 4) == 0;
+	}
+}
+__attribute__((__packed__));
 
 struct EthernetHdr
 {
@@ -42,6 +132,17 @@ inline std::string to_string(const MacAddr& a)
 			 a.addr[0], a.addr[1], a.addr[2], a.addr[3], a.addr[4], a.addr[5]);
 
 	return std::string(buf, sizeof(buf) - 1);
+}
+
+inline std::string to_string(const IPv4Addr& addr)
+{
+	char buf[16];
+	snprintf(buf, sizeof(buf), "%u.%u.%u.%u",
+			(unsigned) addr.addr[0], (unsigned) addr.addr[1],
+			(unsigned) addr.addr[2], (unsigned) addr.addr[3]);
+
+	buf[sizeof(buf) - 1] = 0;
+	return std::string(buf);
 }
 
 std::string to_string(const EthernetHdr& e);

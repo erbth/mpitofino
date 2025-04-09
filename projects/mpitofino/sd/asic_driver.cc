@@ -9,8 +9,8 @@ using namespace bfrt;
 namespace fs = std::filesystem;
 
 
-ASICDriver::ASICDriver(StateRepository& st_repo)
-	: st_repo(st_repo)
+ASICDriver::ASICDriver(StateRepository& state_repo)
+	: state_repo(state_repo)
 {
 	/* Initialize bf_switchd */
 	switchd_ctx.running_in_background = true;
@@ -74,7 +74,7 @@ void ASICDriver::initial_setup()
 {
 	unique_lock lk_st(m_switching_table);
 
-	/* Create an all-ports broadcast group */
+	/* Create multicast groups */
 	/* PRE uses port-stride per pipe of 128; 16 100G ports per pipe */
 	vector<bf_rt_id_t> port_ids;
 	for (int i = 0; i < 4; i++)
@@ -83,24 +83,92 @@ void ASICDriver::initial_setup()
 			port_ids.push_back(i*128 + j*4);
 	}
 
-	check_bf_status(pre_node->tableEntryAdd(*session, dev_tgt,
-				*table_create_key<uint64_t>(pre_node, {"$MULTICAST_NODE_ID", 1}),
-				*table_create_data<uint64_t, vector<bf_rt_id_t>, vector<bf_rt_id_t>>(
-					pre_node,
-					{"$MULTICAST_RID", 1},
-					{"$MULTICAST_LAG_ID", vector<bf_rt_id_t>()},
-					{"$DEV_PORT", port_ids}
-				)
-			),
-			"Add entry to table pre.node");
+	for (auto p : port_ids)
+	{
+		check_bf_status(pre_node->tableEntryAdd(*session, dev_tgt,
+					*table_create_key<uint64_t>(pre_node, {"$MULTICAST_NODE_ID", p}),
+					*table_create_data<uint64_t, vector<bf_rt_id_t>, vector<bf_rt_id_t>>(
+						pre_node,
+						{"$MULTICAST_RID", 1},
+						{"$MULTICAST_LAG_ID", vector<bf_rt_id_t>()},
+						{"$DEV_PORT", vector<bf_rt_id_t>({p})}
+					)
+				),
+				"Add entry to table pre.node");
+	}
 
 	check_bf_status(pre_mgid->tableEntryAdd(*session, dev_tgt,
-				*table_create_key<uint64_t>(pre_mgid, {"$MGID", 1}),
+				*table_create_key<uint64_t>(pre_mgid, {"$MGID", MCAST_FLOOD}),
 				*table_create_data<vector<bf_rt_id_t>, vector<bool>, vector<bf_rt_id_t>>(
 					pre_mgid,
-					{"$MULTICAST_NODE_ID", vector<bf_rt_id_t>({1})},
-					{"$MULTICAST_NODE_L1_XID_VALID", vector<bool>({false})},
-					{"$MULTICAST_NODE_L1_XID", vector<bf_rt_id_t>({0})}
+					{"$MULTICAST_NODE_ID", port_ids},
+					{"$MULTICAST_NODE_L1_XID_VALID", vector<bool>(port_ids.size(), true)},
+					{"$MULTICAST_NODE_L1_XID", port_ids}
+				)
+			),
+			"Add entry to table pre.mgid");
+
+	/* Same, but with CPU port for broadcasts */
+	port_ids.push_back(64);
+	for (auto& p : port_ids)
+		p |= 0x0400;
+
+	for (auto p : port_ids)
+	{
+		check_bf_status(pre_node->tableEntryAdd(*session, dev_tgt,
+					*table_create_key<uint64_t>(pre_node, {"$MULTICAST_NODE_ID", p}),
+					*table_create_data<uint64_t, vector<bf_rt_id_t>, vector<bf_rt_id_t>>(
+						pre_node,
+						{"$MULTICAST_RID", 1},
+						{"$MULTICAST_LAG_ID", vector<bf_rt_id_t>()},
+						{"$DEV_PORT", vector<bf_rt_id_t>({p})}
+					)
+				),
+				"Add entry to table pre.node");
+	}
+
+	check_bf_status(pre_mgid->tableEntryAdd(*session, dev_tgt,
+				*table_create_key<uint64_t>(pre_mgid, {"$MGID", MCAST_BCAST}),
+				*table_create_data<vector<bf_rt_id_t>, vector<bool>, vector<bf_rt_id_t>>(
+					pre_mgid,
+					{"$MULTICAST_NODE_ID", port_ids},
+					{"$MULTICAST_NODE_L1_XID_VALID", vector<bool>(port_ids.size(), true)},
+					{"$MULTICAST_NODE_L1_XID", port_ids}
+				)
+			),
+			"Add entry to table pre.mgid");
+
+
+	/* Create a multicast group for distributing the result of a an example
+	 * collective operation */
+	vector<tuple<bf_rt_id_t, bf_rt_id_t, bf_rt_id_t>> group_ports;
+	group_ports.push_back({0x1000, 0, 1});
+	group_ports.push_back({0x1001, 4, 2});
+
+	port_ids.clear();
+	for (auto [pid, p, rid] : group_ports)
+	{
+		port_ids.push_back(pid);
+
+		check_bf_status(pre_node->tableEntryAdd(*session, dev_tgt,
+					*table_create_key<uint64_t>(pre_node, {"$MULTICAST_NODE_ID", pid}),
+					*table_create_data<uint64_t, vector<bf_rt_id_t>, vector<bf_rt_id_t>>(
+						pre_node,
+						{"$MULTICAST_RID", rid},
+						{"$MULTICAST_LAG_ID", vector<bf_rt_id_t>()},
+						{"$DEV_PORT", vector<bf_rt_id_t>({p})}
+					)
+				),
+				"Add entry to table pre.node");
+	}
+
+	check_bf_status(pre_mgid->tableEntryAdd(*session, dev_tgt,
+				*table_create_key<uint64_t>(pre_mgid, {"$MGID", 0x10}),
+				*table_create_data<vector<bf_rt_id_t>, vector<bool>, vector<bf_rt_id_t>>(
+					pre_mgid,
+					{"$MULTICAST_NODE_ID", port_ids},
+					{"$MULTICAST_NODE_L1_XID_VALID", vector<bool>(port_ids.size(), false)},
+					{"$MULTICAST_NODE_L1_XID", vector<bf_rt_id_t>(port_ids.size(), 0)}
 				)
 			),
 			"Add entry to table pre.mgid");
@@ -154,6 +222,13 @@ void ASICDriver::initial_setup()
 					placeholders::_4, placeholders::_5),
 				nullptr),
 			"Failed to register learn callback");
+
+
+	/* Add special entries to switching table */
+	update_switching_table(MacAddr("ff:ff:ff:ff:ff:ff"), "Ingress.bcast");
+	update_switching_table(
+			state_repo.get_collectives_module_mac_addr(),
+			"Ingress.collective");
 }
 
 
@@ -186,33 +261,21 @@ bf_status_t ASICDriver::eth_switch_learn_cb(
 		/* Update src table */
 		check_bf_status(table_add_or_mod(*switching_table_src,
 					*session, dev_tgt,
-					*table_create_key<uint8_t*>(
+					*table_create_key<const uint8_t*, uint16_t>(
 						switching_table_src,
-						{"hdr.ethernet.src_addr", reinterpret_cast<uint8_t*>(&src_mac), sizeof(src_mac)}
+						{"hdr.ethernet.src_addr", reinterpret_cast<uint8_t*>(&src_mac), sizeof(src_mac)},
+						{"meta.ingress_port", (uint16_t) ingress_port}
 					),
-					*table_create_data_action<uint64_t, uint64_t>(
+					*table_create_data_action<uint64_t>(
 						switching_table_src,
-						"Ingress.stsrc_known",
-						{"port", ingress_port},
+						"NoAction",
 						{"$ENTRY_TTL", 5000}
 					)
 				),
 				"Failed to add entry to switching_table_src");
 
 		/* Update switching table */
-		check_bf_status(table_add_or_mod(*switching_table,
-					*session, dev_tgt,
-					*table_create_key<uint8_t*>(
-						switching_table,
-						{"hdr.ethernet.dst_addr", reinterpret_cast<uint8_t*>(&src_mac), sizeof(src_mac)}
-					),
-					*table_create_data_action<uint64_t>(
-						switching_table,
-						"Ingress.send",
-						{"port", ingress_port}
-					)
-				),
-				"Failed to add entry to switching_table");
+		update_switching_table(src_mac, "Ingress.send", ingress_port);
 	}
 
 	check_bf_status(
@@ -251,10 +314,46 @@ void ASICDriver::eth_switch_idle_cb(
 	/* Remove entry from switching table */
 	check_bf_status(switching_table->tableEntryDel(
 				*session, dev_tgt,
-				*table_create_key<uint8_t*>(
+				*table_create_key<const uint8_t*>(
 					switching_table,
 					{"hdr.ethernet.dst_addr", reinterpret_cast<uint8_t*>(&src_addr), sizeof(src_addr)}
 				)
 			),
 			"Failed to delete table entry");
+}
+
+
+void ASICDriver::update_switching_table(
+		const MacAddr& addr, const char* action, uint64_t port)
+{
+	check_bf_status(table_add_or_mod(*switching_table,
+				*session, dev_tgt,
+				*table_create_key<const uint8_t*>(
+					switching_table,
+					{"hdr.ethernet.dst_addr", reinterpret_cast<const uint8_t*>(&addr), sizeof(addr)}
+				),
+				*table_create_data_action<uint64_t>(
+					switching_table,
+					action,
+					{"port", port}
+				)
+			),
+			"Failed to update entry in switching_table");
+}
+
+void ASICDriver::update_switching_table(
+		const MacAddr& addr, const char* action)
+{
+	check_bf_status(table_add_or_mod(*switching_table,
+				*session, dev_tgt,
+				*table_create_key<const uint8_t*>(
+					switching_table,
+					{"hdr.ethernet.dst_addr", reinterpret_cast<const uint8_t*>(&addr), sizeof(addr)}
+				),
+				*table_create_data_action<>(
+					switching_table,
+					action
+				)
+			),
+			"Failed to update entry in switching_table");
 }
