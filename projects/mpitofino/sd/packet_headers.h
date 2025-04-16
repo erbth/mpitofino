@@ -32,4 +32,36 @@ struct ARPHdr
 }
 __attribute__((__packed__));
 
+
+enum class ipv4_protocol_t : uint8_t
+{
+	ICMP = 0x01
+};
+
+struct IPv4Hdr
+{
+	uint8_t version_ihl;
+	uint8_t tos;
+	uint16_t total_length;
+	uint16_t identification;
+	uint16_t flags_fragment_offset;
+	uint8_t ttl;
+	uint8_t protocol;
+	uint16_t header_checksum;
+	IPv4Addr src_addr;
+	IPv4Addr dst_addr;
+}
+__attribute__((__packed__));
+
+
+struct ICMPHdr
+{
+	uint8_t type;
+	uint8_t code;
+	uint16_t checksum;
+	uint16_t id;
+	uint16_t seq;
+}
+__attribute__((__packed__));
+
 #endif /* __PACKET_HEADER_H */

@@ -19,6 +19,9 @@ control CollectivesDistributor(
 
 		hdr.udp.src_port = src_port;
 		hdr.udp.dst_port = dst_port;
+
+		// Disable checksum
+		hdr.udp.checksum = 0;
 	}
 
 	table output_address {

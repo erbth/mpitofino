@@ -1,7 +1,7 @@
+#include <algorithm>
 #include <system_error>
 #include <stdexcept>
 #include "packet_processor.h"
-#include "packet_headers.h"
 
 extern "C" {
 #include <sys/socket.h>
@@ -131,6 +131,10 @@ void PacketProcessor::parse_packet(const char* ptr, size_t size)
 		parse_packet_arp(hdr, ptr, size);
 		break;
 
+	case (int) ether_type_t::IPv4:
+		parse_packet_ipv4(hdr, ptr, size);
+		break;
+
 	default:
 		break;
 	}
@@ -191,6 +195,107 @@ void PacketProcessor::parse_packet_arp(
 	else if (op == 2)
 	{
 		/* ARP reply */
+	}
+}
+
+void PacketProcessor::parse_packet_ipv4(
+		const EthernetHdr& src_eth_hdr, const char* ptr, size_t size)
+{
+	if (size < 20)
+	{
+		fprintf(stderr, "Received malformed IPv4 packet\n");
+		return;
+	}
+
+	auto& hdr = *reinterpret_cast<const IPv4Hdr*>(ptr);
+	ptr += sizeof(hdr);
+	size -= sizeof(hdr);
+
+	switch (hdr.protocol)
+	{
+	case (int) ipv4_protocol_t::ICMP:
+		parse_packet_ipv4_icmp(src_eth_hdr, hdr, ptr, size);
+		break;
+
+	default:
+		break;
+	}
+}
+
+void PacketProcessor::parse_packet_ipv4_icmp(
+		const EthernetHdr& src_eth_hdr, const IPv4Hdr& src_ipv4_hdr,
+		const char* ptr, size_t size)
+{
+	if (size < 8)
+	{
+		fprintf(stderr, "Received malformed ICMP packet\n");
+		return;
+	}
+
+	auto& hdr = *reinterpret_cast<const ICMPHdr*>(ptr);
+	ptr += sizeof(hdr);
+	size -= sizeof(hdr);
+
+	if (hdr.type == 8 && hdr.code == 0)
+	{
+		/* Echo Request */
+		char buf[1024];
+		char* reply_ptr = buf;
+
+		memset(buf, 0, sizeof(buf));
+
+		/* Ethernet header */
+		auto& eth_hdr = *reinterpret_cast<EthernetHdr*>(reply_ptr);
+		reply_ptr += sizeof(eth_hdr);
+
+		eth_hdr.src = st_repo.get_collectives_module_mac_addr();
+
+		/* NOTE: This is actually wrong. The (currently non-existent) ARP
+		 * neighbor table shall be used here to (a) be standards compliant and
+		 * (b) support setups which relay on it. */
+		eth_hdr.dst = src_eth_hdr.src;
+
+		eth_hdr.type = htons((int) ether_type_t::IPv4);
+
+		/* IPv4 header */
+		auto& ipv4_hdr = *reinterpret_cast<IPv4Hdr*>(reply_ptr);
+		reply_ptr += sizeof(ipv4_hdr);
+
+		ipv4_hdr.version_ihl = 0x45;
+		ipv4_hdr.tos = 0;
+		ipv4_hdr.identification = 0x1234;
+		ipv4_hdr.flags_fragment_offset = 0;
+		ipv4_hdr.ttl = 16;
+		ipv4_hdr.protocol = (int) ipv4_protocol_t::ICMP;
+		ipv4_hdr.src_addr = st_repo.get_collectives_module_ip_addr();
+		ipv4_hdr.dst_addr = src_ipv4_hdr.src_addr;
+
+		/* ICMP header */
+		auto& icmp_hdr = *reinterpret_cast<ICMPHdr*>(reply_ptr);
+		reply_ptr += sizeof(icmp_hdr);
+
+		icmp_hdr.type = 0;
+		icmp_hdr.code = 0;
+		icmp_hdr.id = hdr.id;
+		icmp_hdr.seq = hdr.seq;
+
+		auto data_size = min(sizeof(buf) - (reply_ptr - buf), size);
+		memcpy(reply_ptr, ptr, data_size);
+
+		reply_ptr += data_size;
+
+		/* Set checksum */
+		icmp_hdr.checksum = internet_checksum(
+				(const char*) &icmp_hdr,
+				reply_ptr - (char*) &icmp_hdr);
+
+
+		/* Set IPv4 total length */
+		ipv4_hdr.total_length = htons(reply_ptr - buf - sizeof(eth_hdr));
+		ipv4_hdr.header_checksum = internet_checksum(
+				(const char*) &ipv4_hdr, sizeof(ipv4_hdr));
+
+		send_packet(buf, reply_ptr - buf);
 	}
 }
 

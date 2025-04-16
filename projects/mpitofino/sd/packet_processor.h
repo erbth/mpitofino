@@ -8,6 +8,7 @@
 #include "common/epoll.h"
 #include "common/simple_types.h"
 #include "state_repository.h"
+#include "packet_headers.h"
 
 
 class PacketProcessor final
@@ -25,6 +26,11 @@ protected:
 
 	void parse_packet(const char* ptr, size_t size);
 	void parse_packet_arp(const EthernetHdr& src_eth_hdr, const char* ptr, size_t size);
+
+	void parse_packet_ipv4(const EthernetHdr& src_eth_hdr, const char* ptr, size_t size);
+	void parse_packet_ipv4_icmp(
+			const EthernetHdr& src_eth_hdr, const IPv4Hdr& src_ipv4_hdr,
+			const char* ptr, size_t size);
 
 	void send_packet(const char* ptr, size_t size);
 

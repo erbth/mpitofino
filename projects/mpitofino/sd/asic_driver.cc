@@ -229,6 +229,44 @@ void ASICDriver::initial_setup()
 	update_switching_table(
 			state_repo.get_collectives_module_mac_addr(),
 			"Ingress.collective");
+
+	/* Ignore all packets from the CPU port for learning */
+	uint8_t value[6] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+	uint8_t mask[6] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+	check_bf_status(table_add_or_mod(*switching_table_src,
+				*session, dev_tgt,
+				*table_create_key<const uint8_t*, uint64_t>(
+					switching_table_src,
+					table_field_desc_t<const uint8_t*>::create_ternary(
+						"hdr.ethernet.src_addr", value, mask, sizeof(value)),
+					table_field_desc_t<uint64_t>::create_ternary(
+						"meta.ingress_port", 64, 0x1ff)
+				),
+				*table_create_data_action<>(
+					switching_table_src,
+					"NoAction"
+				)
+			),
+			"Failed to add entry to switching_table_src");
+
+	/* Ignore all packets coming from the recirculation port for mac address
+	 * learning. */
+	check_bf_status(table_add_or_mod(*switching_table_src,
+				*session, dev_tgt,
+				*table_create_key<const uint8_t*, uint64_t>(
+					switching_table_src,
+					table_field_desc_t<const uint8_t*>::create_ternary(
+						"hdr.ethernet.src_addr", value, mask, sizeof(value)),
+					table_field_desc_t<uint64_t>::create_ternary(
+						"meta.ingress_port", 68, 0x1ff)
+				),
+				*table_create_data_action<>(
+					switching_table_src,
+					"NoAction"
+				)
+			),
+			"Failed to add entry to switching_table_src");
 }
 
 
@@ -259,12 +297,16 @@ bf_status_t ASICDriver::eth_switch_learn_cb(
 				"Failed to ingress port from digest");
 
 		/* Update src table */
+		uint8_t mask[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 		check_bf_status(table_add_or_mod(*switching_table_src,
 					*session, dev_tgt,
-					*table_create_key<const uint8_t*, uint16_t>(
+					*table_create_key<const uint8_t*, uint64_t>(
 						switching_table_src,
-						{"hdr.ethernet.src_addr", reinterpret_cast<uint8_t*>(&src_mac), sizeof(src_mac)},
-						{"meta.ingress_port", (uint16_t) ingress_port}
+						table_field_desc_t<const uint8_t*>::create_ternary(
+							"hdr.ethernet.src_addr", reinterpret_cast<uint8_t*>(&src_mac),
+							mask, sizeof(src_mac)),
+						table_field_desc_t<uint64_t>::create_ternary(
+							"meta.ingress_port", ingress_port, 0x1ff)
 					),
 					*table_create_data_action<uint64_t>(
 						switching_table_src,
@@ -298,10 +340,12 @@ void ASICDriver::eth_switch_idle_cb(
 				"hdr.ethernet.src_addr", &field_src_addr),
 			"Failed to resolve field id");
 
+	uint8_t mask[sizeof(src_addr)];
 	check_bf_status(
-			key->getValue(
+			key->getValueandMask(
 				field_src_addr,
-				sizeof(src_addr), reinterpret_cast<uint8_t*>(&src_addr)),
+				sizeof(src_addr),
+				reinterpret_cast<uint8_t*>(&src_addr), mask),
 			"Failed to get src addr");
 
 

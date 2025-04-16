@@ -9,7 +9,7 @@
 #include "collectives_distributor.p4"
 
 
-#define SWITCHING_TABLE_SIZE	65536
+#define SWITCHING_TABLE_SIZE	2048
 
 const bit<3> ETH_SWITCH_LEARN_DIGEST = 0;
 
@@ -140,8 +140,8 @@ control Ingress(
 	@idletime_precision(3)
 	table switching_table_src {
 		key = {
-			hdr.ethernet.src_addr : exact;
-			meta.ingress_port : exact;
+			hdr.ethernet.src_addr : ternary;
+			meta.ingress_port : ternary;
 		}
 		actions = { NoAction; stsrc_unknown; }
 
@@ -160,6 +160,10 @@ control Ingress(
 
 			if (meta.is_coll == 1 && hdr.udp.isValid()) {
 				collectives.apply(hdr, meta, ig_intr_md, ig_dprsr_md, ig_tm_md);
+			} else if (meta.is_coll == 1)
+			{
+				/* Forward to CPU to handle e.g. ICMP */
+				ig_tm_md.ucast_egress_port = 64;
 			}
 		}
 
@@ -262,7 +266,24 @@ control EgressDeparser(
 	in my_egress_metadata_t meta,
 	in egress_intrinsic_metadata_for_deparser_t eg_dprsr_md)
 {
+	Checksum() ipv4_checksum;
+
 	apply {
+		if (hdr.ipv4.isValid()) {
+			hdr.ipv4.header_checksum = ipv4_checksum.update({
+				hdr.ipv4.version,
+				hdr.ipv4.ihl,
+				hdr.ipv4.tos,
+				hdr.ipv4.total_length,
+				hdr.ipv4.identification,
+				hdr.ipv4.flags,
+				hdr.ipv4.fragment_offset,
+				hdr.ipv4.ttl,
+				hdr.ipv4.protocol,
+				hdr.ipv4.src_addr,
+				hdr.ipv4.dst_addr});
+		}
+
 		pkt.emit(hdr);
 	}
 }

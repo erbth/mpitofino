@@ -22,6 +22,8 @@ struct table_field_desc_t
 	const T& value;
 	const size_t size = 0;
 
+	const T* mask = nullptr;
+
 	table_field_desc_t(const char* name, const T& value)
 		: name(name), value(value)
 	{}
@@ -29,6 +31,27 @@ struct table_field_desc_t
 	table_field_desc_t(const char* name, const T& value, size_t size)
 		: name(name), value(value), size(size)
 	{}
+
+
+	static table_field_desc_t create_ternary(
+		const char* name, const T& value, const T& mask)
+	{
+		table_field_desc_t d(name, value);
+
+		d.mask = &mask;
+
+		return d;
+	}
+
+	static table_field_desc_t create_ternary(
+		const char* name, const T& value, const T& mask, size_t size)
+	{
+		table_field_desc_t d(name, value, size);
+
+		d.mask = &mask;
+
+		return d;
+	}
 };
 
 template<typename T>
@@ -36,9 +59,18 @@ void table_key_set_value(
 		BfRtTableKey& key, bf_rt_id_t field_id,
 		const table_field_desc_t<T>& arg)
 {
-	check_bf_status(
-			key.setValue(field_id, arg.value),
-			"Failed to set table key field value");
+	if (arg.mask)
+	{
+		check_bf_status(
+			key.setValueandMask(field_id, arg.value, *arg.mask),
+				"Failed to set table key ternary field value");
+	}
+	else
+	{
+		check_bf_status(
+				key.setValue(field_id, arg.value),
+				"Failed to set table key field value");
+	}
 }
 
 template<>
@@ -46,9 +78,18 @@ void table_key_set_value<const uint8_t*>(
 		BfRtTableKey& key, bf_rt_id_t field_id,
 		const table_field_desc_t<const uint8_t*>& arg)
 {
-	check_bf_status(
-			key.setValue(field_id, arg.value, arg.size),
-			"Failed to set table key field value");
+	if (arg.mask)
+	{
+		check_bf_status(
+				key.setValueandMask(field_id, arg.value, *arg.mask, arg.size),
+				"Failed to set table key field value");
+	}
+	else
+	{
+		check_bf_status(
+				key.setValue(field_id, arg.value, arg.size),
+				"Failed to set table key field value");
+	}
 }
 
 template<typename... Ts>

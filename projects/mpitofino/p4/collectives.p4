@@ -116,28 +116,28 @@ control Collectives(
 
 	RegisterAction<bit<32>, bit<12>, bit<32>>(state_bitmaps_low) update_bitmap_low = {
 		void apply(inout bit<32> bitmap, out bit<32> new_bitmap) {
-			/* NOTE: This means that the register needs to be cleared manually
-			 * when re-assigning this register to a different collective
-			 * channel. However this must be done anyway, because the channel's
-			 * state might not be clean e.g. due to packet loss. */
-			if (bitmap == meta.full_bitmap.low) {
-				bitmap = meta.node_bitmap.low;
-			} else {
-				bitmap = bitmap | meta.node_bitmap.low;
-			}
-
+			bitmap = bitmap | meta.node_bitmap.low;
 			new_bitmap = bitmap;
 		}
 	};
 
 	RegisterAction<bit<32>, bit<12>, bit<32>>(state_bitmaps_high) update_bitmap_high = {
 		void apply(inout bit<32> bitmap, out bit<32> new_bitmap) {
-			if (bitmap == meta.full_bitmap.high) {
-				bitmap = meta.node_bitmap.high;
-			} else {
-				bitmap = bitmap | meta.node_bitmap.high;
-			}
+			bitmap = bitmap | meta.node_bitmap.high;
+			new_bitmap = bitmap;
+		}
+	};
 
+	RegisterAction<bit<32>, bit<12>, bit<32>>(state_bitmaps_low) clear_bitmap_low = {
+		void apply(inout bit<32> bitmap, out bit<32> new_bitmap) {
+			bitmap = 0;
+			new_bitmap = bitmap;
+		}
+	};
+
+	RegisterAction<bit<32>, bit<12>, bit<32>>(state_bitmaps_high) clear_bitmap_high = {
+		void apply(inout bit<32> bitmap, out bit<32> new_bitmap) {
+			bitmap = 0;
 			new_bitmap = bitmap;
 		}
 	};
@@ -230,14 +230,20 @@ control Collectives(
 		 * future) sequence number */
 		unit_selector.apply();
 
-		if (meta.agg_unit != 65535) {
+		if (meta.agg_unit != 65535 && !meta.agg_is_clear)
+		{
 			/* Track progress of aggregation at this aggregation-node (switch)
 			 * */
 			meta.node_bitmap.low = update_bitmap_low.execute((bit<12>) meta.agg_unit);
 			meta.node_bitmap.high = update_bitmap_high.execute((bit<12>) meta.agg_unit);
-
-			check_complete.apply();
 		}
+		else if (meta.agg_unit != 65535)
+		{
+			clear_bitmap_low.execute((bit<12>) meta.agg_unit);
+			clear_bitmap_high.execute((bit<12>) meta.agg_unit);
+		}
+
+		check_complete.apply();
 
 		/* These statements do not need the gateway, because they contain a
 		 * table which matches on meta.agg_unit anyway */

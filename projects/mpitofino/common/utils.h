@@ -8,9 +8,11 @@ extern "C" {
 #include <unistd.h>
 }
 
-/* The class `WrapepdFD' and the function `check_syscall' were copied from sdfs,
- * file src/common/utils.h, available from https://github.com/erbth/sdfs under
- * the MIT license. */
+#define FINALLY(X,F) try { X; F; } catch (...) { F; throw; }
+
+/* The class `WrapepdFD' and the function `check_syscall' were copied and
+ * partially changed from sdfs, file src/common/utils.h, available from
+ * https://github.com/erbth/sdfs under the MIT license. */
 class WrappedFD final
 {
 protected:
@@ -73,6 +75,11 @@ public:
 		fd = new_fd;
 	}
 
+	inline void set_errno(int new_fd)
+	{
+		set_errno(new_fd, "");
+	}
+
 	inline int get_fd()
 	{
 		return fd;
@@ -104,5 +111,8 @@ inline T check_syscall(T ret, const char* msg)
 /* End copied from sdfs */
 
 std::string to_hex_string(int i);
+
+/* E.g. for IPv4 and ICMP; RFC1071 */
+uint16_t internet_checksum(const char* data, size_t size);
 
 #endif /* __COMMON_UTILS_H */
