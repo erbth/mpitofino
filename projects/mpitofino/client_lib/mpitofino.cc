@@ -1,20 +1,24 @@
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
+#include "common/com_utils.h"
 #include "mpitofino.h"
+#include "client_lib_nd.pb.h"
 
 extern "C" {
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/udp.h>
-#include <ifaddrs.h>
 #include <net/if.h>
 #include <arpa/inet.h>
+#include <sys/un.h>
 }
 
-
 using namespace std;
+namespace fs = std::filesystem;
+
 
 namespace mpitofino
 {
@@ -64,59 +68,64 @@ inline void convert_endianess(const void* src, void* dst, size_t size, datatype_
 /* Client */
 Client::Client()
 {
-	/* Get IP address of interface connected to high performance fabric. NOTE:
-	 * This shall later be done by node daemon. */
-	struct ifaddrs* ifa = nullptr;
-	check_syscall(getifaddrs(&ifa), "getifaddrs");
+	GOOGLE_PROTOBUF_VERIFY_VERSION;
 
-	FINALLY(
+	/* Determine path of socket of node daemon, and connect */
+	vector<fs::path> socket_cand;
+	socket_cand.push_back("/run/mpitofino-sd");
+
+	auto val = getenv("XDG_RUNTIME_DIR");
+	if (val && strlen(val) > 0 && val[0] == '/')
+		socket_cand.push_back(string(val) + "/mpitofino-sd");
+
+	for (const auto& s : socket_cand)
 	{
-		for (auto i = ifa; i != nullptr; i = i->ifa_next)
+		if (fs::exists(fs::symlink_status(s)))
 		{
-			if (!(i->ifa_flags & IFF_UP))
-				continue;
-
-			if (i->ifa_flags & IFF_LOOPBACK)
-				continue;
-
-			if (!i->ifa_addr)
-				continue;
-
-			if (i->ifa_addr->sa_family != AF_INET)
-				continue;
-
-			hpf_local_addr = *((struct sockaddr_in*) i->ifa_addr);
+			nd_socket_path = s;
+			break;
 		}
-	},
-	{
-		freeifaddrs(ifa);
-	});
+	}
+
+	if (nd_socket_path.empty())
+		throw runtime_error("Unable to find path of node daemon's unix domain socket");
+
+	WrappedFD fd;
+	fd.set_errno(
+		socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0),
+		"socket(AF_UNIX)");
+
+	/* Try to connect */
+	struct sockaddr_un addr = {
+		.sun_family = AF_UNIX
+	};
+
+	strncpy(addr.sun_path, nd_socket_path.c_str(), sizeof(addr.sun_path));
+	addr.sun_path[sizeof(addr.sun_path) - 1] = '\0';
+
+	check_syscall(
+		connect(fd.get_fd(), (struct sockaddr*) &addr, sizeof(addr)),
+		"connect(nd unix domain socket)");
+
+	nd_wfd = move(fd);
 }
 
 Client::~Client()
 {
 }
 
-struct sockaddr_in Client::get_hpf_local_addr()
-{
-	return hpf_local_addr;
-}
 
-
-CollectiveChannel::CollectiveChannel()
+CollectiveChannel::CollectiveChannel(
+		const struct sockaddr_in& local_addr,
+		const std::vector<struct sockaddr_in> fabric_addrs)
+	:
+		local_addr(local_addr), fabric_addrs(fabric_addrs)
 {
 	fd.set_errno(socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0));
 
-	/* Shall later be obtained from node daemon */
-	addr.sin_family = AF_INET;
-	addr.sin_port = htons(0x4000);
-	addr.sin_addr.s_addr = htonl(0x0a0a8000);
-}
-
-void CollectiveChannel::bind(const struct sockaddr_in* addr)
-{
+	/* Bind socket */
 	check_syscall(
-			::bind(fd.get_fd(), (const struct sockaddr*) addr, sizeof(*addr)),
+			::bind(fd.get_fd(), (const struct sockaddr*) &local_addr, sizeof(local_addr)),
 			"bind collective channel socket");
 }
 
@@ -134,23 +143,42 @@ AggregationGroup::~AggregationGroup()
 
 CollectiveChannel* AggregationGroup::get_channel(tag_t tag)
 {
+	/* Local cache */
 	{
 		auto i = channels.find(tag);
 		if (i != channels.end())
 			return &(i->second);
 	}
 
+
 	/* Request a collective channel from the node daemon */
-	auto [i,created] = channels.emplace();
-	auto ch = &(i->second);
+	ClientRequest req;
+	auto msg = req.mutable_get_channel();
+	msg->set_type(ChannelType::ALLREDUCE_INT32);
+	msg->set_tag(tag);
+	send_protobuf_message_simple(client.get_nd_fd(), req);
 
-	/* NOTE: ip and port shall later be allocated by the node daemon */
-	auto addr = client.get_hpf_local_addr();
-	addr.sin_port = htons(0x2000);
 
-	ch->bind(&addr);
+	/* Parse response */
+	auto reply = recv_protobuf_message_simple_dgram<GetChannelResponse>(client.get_nd_fd());
 
-	return ch;
+	struct sockaddr_in local_addr = {
+		.sin_family = AF_INET,
+		.sin_port = htons(reply.local_port())
+	};
+	local_addr.sin_addr.s_addr = reply.local_ip();
+
+	vector<struct sockaddr_in> fabric_addrs;
+	struct sockaddr_in addr = {
+		.sin_family = AF_INET,
+		.sin_port = htons(reply.fabric_port())
+	};
+	addr.sin_addr.s_addr = htonl(reply.fabric_ip());
+	fabric_addrs.push_back(addr);
+
+
+	/* Create collective channel */
+	return &channels.try_emplace(tag, local_addr, fabric_addrs).first->second;
 }
 
 
@@ -174,8 +202,10 @@ void AggregationGroup::allreduce(
 		convert_endianess((const uint8_t*) sbuf + i, buf, to_send, dtype);
 
 		/* Send block */
+		auto& addr = ch->fabric_addrs.front();
+		
 		if (sendto(ch->fd.get_fd(), buf, block_size, 0,
-					(const struct sockaddr*) &ch->addr, sizeof(ch->addr))
+					(const struct sockaddr*) &addr, sizeof(addr))
 				!= (ssize_t) block_size)
 		{
 			throw system_error(errno, generic_category(),

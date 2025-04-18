@@ -1,0 +1,26 @@
+/* Retrieve/allocate a channel */
+enum ChannelType {
+	ALLREDUCE_INT32 = 0;
+}
+
+/* Request-response pairs initiated by client */
+message GetChannel {
+	required ChannelType type = 1;
+	required uint64 tag = 2;  // Unique through the entire clustern; e.g. a tuple (application id, MPI tag)
+}
+
+message GetChannelResponse {
+	required uint32 local_ip = 2;
+	required uint32 local_port = 3;
+
+	required uint32 fabric_ip = 4;
+	required uint32 fabric_port = 5;
+}
+
+
+/* Client -> nd requests */
+message ClientRequest {
+	oneof messages {
+		GetChannel get_channel = 1;
+	}
+}

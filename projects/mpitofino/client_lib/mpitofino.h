@@ -3,8 +3,10 @@
 #define __MPITOFINO_H
 
 #include <cstdint>
+#include <vector>
 #include <memory>
 #include <map>
+#include <filesystem>
 #include "common/utils.h"
 
 extern "C" {
@@ -33,7 +35,9 @@ size_t get_datatype_element_size(datatype_t dtype);
 class Client final
 {
 protected:
-	struct sockaddr_in hpf_local_addr{};
+	/* Unix domain socket for communicaton with node daemon (nd) */
+	std::filesystem::path nd_socket_path;
+	WrappedFD nd_wfd;
 
 public:
 	Client();
@@ -41,7 +45,12 @@ public:
 
 	Client(Client&&) = delete;
 
-	struct sockaddr_in get_hpf_local_addr();
+	/* TODO: This should support concurrency somehow; probably through
+	   locking */
+	inline int get_nd_fd()
+	{
+		return nd_wfd.get_fd();
+	}
 };
 
 
@@ -50,11 +59,13 @@ public:
 struct CollectiveChannel
 {
 	WrappedFD fd;
-	struct sockaddr_in addr{};
 
-	CollectiveChannel();
+	struct sockaddr_in local_addr{};
+	std::vector<struct sockaddr_in> fabric_addrs;
 
-	void bind(const struct sockaddr_in*);
+	CollectiveChannel(
+		const struct sockaddr_in& local_addr,
+		const std::vector<struct sockaddr_in> fabric_addrs);
 };
 
 /* Like an MPI communicator */

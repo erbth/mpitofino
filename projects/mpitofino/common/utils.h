@@ -1,6 +1,7 @@
 #ifndef __COMMON_UTILS_H
 #define __COMMON_UTILS_H
 
+#include <cstdint>
 #include <system_error>
 #include <string>
 
