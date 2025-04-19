@@ -58,6 +58,9 @@ PacketProcessor::PacketProcessor(StateRepository& st_repo, Epoll& epoll)
 		epoll.add_fd(com_fd.get_fd(), EPOLLIN | EPOLLHUP | EPOLLRDHUP,
 					 bind(&PacketProcessor::on_com_fd_data, this,
 						 placeholders::_1, placeholders::_2));
+
+		/* Start timer */
+		discovery_protocol_timer.start(10 * 1000 * 1000);
 	}
 	catch (...)
 	{
@@ -164,8 +167,11 @@ void PacketProcessor::parse_packet_arp(
 			memset(buf, 0, sizeof(buf));
 
 			/* Control plane offload header */
-			//auto& cpo_hdr = *reinterpret_cast<CPOffloadHdr*>(ptr);
-			//ptr += sizeof(cpo_hdr);
+			auto& cpo_hdr = *reinterpret_cast<CPOffloadHdr*>(ptr);
+			ptr += sizeof(cpo_hdr);
+
+			/* Use switching table */
+			cpo_hdr.port_id = htons(65535);
 
 			/* Ethernet header */
 			auto& eth_hdr = *reinterpret_cast<EthernetHdr*>(ptr);
@@ -244,6 +250,13 @@ void PacketProcessor::parse_packet_ipv4_icmp(
 
 		memset(buf, 0, sizeof(buf));
 
+		/* Control plane offload header */
+		auto& cpo_hdr = *reinterpret_cast<CPOffloadHdr*>(reply_ptr);
+		reply_ptr += sizeof(cpo_hdr);
+
+		/* Use switching table */
+		cpo_hdr.port_id = htons(65535);
+
 		/* Ethernet header */
 		auto& eth_hdr = *reinterpret_cast<EthernetHdr*>(reply_ptr);
 		reply_ptr += sizeof(eth_hdr);
@@ -291,7 +304,9 @@ void PacketProcessor::parse_packet_ipv4_icmp(
 
 
 		/* Set IPv4 total length */
-		ipv4_hdr.total_length = htons(reply_ptr - buf - sizeof(eth_hdr));
+		ipv4_hdr.total_length = htons(reply_ptr - buf -
+									  sizeof(eth_hdr) - sizeof(cpo_hdr));
+
 		ipv4_hdr.header_checksum = internet_checksum(
 				(const char*) &ipv4_hdr, sizeof(ipv4_hdr));
 
@@ -314,5 +329,79 @@ void PacketProcessor::send_packet(const char* ptr, size_t size)
 	{
 		fprintf(stderr, "Failed to send packet to dataplane\n");
 		return;
+	}
+}
+
+
+void PacketProcessor::on_discovery_protocol_timer()
+{
+	/* Ideally one would use LLDP, but this requires a LLDP setup on the
+	   clients, which complicates the test setup more than required. */
+
+	char buf[1024];
+	memset(buf, 0, sizeof(buf));
+
+	/* TODO: Query state_repo for active ports and use those */
+	for (int port_id = 0; port_id < 4; port_id++)
+	{
+		char* ptr = buf;
+
+		/* Control plane offload header */
+		auto& cpo_hdr = *reinterpret_cast<CPOffloadHdr*>(ptr);
+		ptr += sizeof(cpo_hdr);
+
+		cpo_hdr.port_id = htons(port_id * 4);
+
+
+		/* Ethernet header */
+		auto& eth_hdr = *reinterpret_cast<EthernetHdr*>(ptr);
+		ptr += sizeof(eth_hdr);
+
+		eth_hdr.src = st_repo.get_collectives_module_mac_addr();
+		eth_hdr.dst = MacAddr("ff:ff:ff:ff:ff:ff");
+		eth_hdr.type = htons((int) ether_type_t::IPv4);
+
+
+		/* IPv4 header */
+		auto& ipv4_hdr = *reinterpret_cast<IPv4Hdr*>(ptr);
+		ptr += sizeof(ipv4_hdr);
+
+		ipv4_hdr.version_ihl = 0x45;
+		ipv4_hdr.tos = 0;
+		ipv4_hdr.identification = 0x1234;
+		ipv4_hdr.flags_fragment_offset = 0;
+		ipv4_hdr.ttl = 16;
+		ipv4_hdr.protocol = (int) ipv4_protocol_t::UDP;
+		ipv4_hdr.src_addr = st_repo.get_collectives_module_ip_addr();
+		ipv4_hdr.dst_addr = st_repo.get_collectives_module_broadcast_addr();
+
+
+		/* UDP header */
+		auto& udp_hdr = *reinterpret_cast<UDPHdr*>(ptr);
+		ptr += sizeof(udp_hdr);
+
+		udp_hdr.src_port = htons(UDP_PORT_TDP);
+		udp_hdr.dst_port = htons(UDP_PORT_TDP);
+
+
+		/* TDP header */
+		auto& tdp_hdr = *reinterpret_cast<TDPHdr*>(ptr);
+		ptr += sizeof(tdp_hdr);
+
+		tdp_hdr.port = htons(port_id);
+		tdp_hdr.ctrl_ip = st_repo.get_control_ip_addr();
+
+
+		/* Set UDP length */
+		udp_hdr.length = htons(ptr - (const char*) &udp_hdr);
+		
+		/* Set IPv4 total length */
+		ipv4_hdr.total_length = htons(ptr - buf -
+									  sizeof(eth_hdr) - sizeof(cpo_hdr));
+
+		ipv4_hdr.header_checksum = internet_checksum(
+				(const char*) &ipv4_hdr, sizeof(ipv4_hdr));
+
+		send_packet(buf, ptr - buf);
 	}
 }

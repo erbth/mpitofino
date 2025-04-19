@@ -1,8 +1,9 @@
 #ifndef __PACKET_HEADER_H
 #define __PACKET_HEADER_H
 
-#include <cstdio>
+#include <cstdint>
 #include <string>
+#include "common/packet_headers.h"
 
 enum class ether_type_t : uint16_t
 {
@@ -35,7 +36,8 @@ __attribute__((__packed__));
 
 enum class ipv4_protocol_t : uint8_t
 {
-	ICMP = 0x01
+	ICMP = 0x01,
+	UDP  = 0x11
 };
 
 struct IPv4Hdr
@@ -63,5 +65,16 @@ struct ICMPHdr
 	uint16_t seq;
 }
 __attribute__((__packed__));
+
+
+struct UDPHdr
+{
+	uint16_t src_port;
+	uint16_t dst_port;
+	uint16_t length;
+	uint16_t checksum;
+}
+__attribute__((__packed__));
+	
 
 #endif /* __PACKET_HEADER_H */

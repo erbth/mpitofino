@@ -57,3 +57,13 @@ IPv4Addr StateRepository::get_collectives_module_ip_addr()
 {
 	return collectives_module_ip_addr;
 }
+
+IPv4Addr StateRepository::get_collectives_module_broadcast_addr()
+{
+	return collectives_module_broadcast_addr;
+}
+
+IPv4Addr StateRepository::get_control_ip_addr()
+{
+	return control_ip_addr;
+}

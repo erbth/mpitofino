@@ -39,8 +39,8 @@ control CollectivesDistributor(
 		size = 1024;
 
 		const entries = {
-			(1, 1) : output_address_set(0x028000000400, 0x525500000015, 0x0a0a8000, 0x0a0a0001, 0x4000, 0x2000);
-			(1, 2) : output_address_set(0x028000000400, 0x525500000014, 0x0a0a8000, 0x0a0a0002, 0x4000, 0x2000);
+			(1, 1) : output_address_set(0x028000000400, 0x525500000015, 0x0a0a8000, 0x0a0a0001, 0x6000, 0x4000);
+			(1, 2) : output_address_set(0x028000000400, 0x525500000014, 0x0a0a8000, 0x0a0a0002, 0x6000, 0x4000);
 		}
 	}
 

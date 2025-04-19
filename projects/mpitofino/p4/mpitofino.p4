@@ -42,6 +42,15 @@ parser IngressParser(
 		meta.bridge_header.setValid();
 		meta.bridge_header.agg_unit = 65535;
 
+		transition select(ig_intr_md.ingress_port) {
+			64 : parse_cpoffload;
+			default : parse_ethernet;
+		}
+	}
+
+	state parse_cpoffload {
+		pkt.extract(meta.cpoffload);
+
 		transition parse_ethernet;
 	}
 
@@ -152,7 +161,14 @@ control Ingress(
 
 
 	apply {
-		if (hdr.ethernet.isValid())
+		if (meta.cpoffload.isValid() && meta.cpoffload.port_id != 65535)
+		{
+			/* Override all other actions and output the packet on the
+			 * specified port. */
+			ig_tm_md.ucast_egress_port = (PortId_t) meta.cpoffload.port_id;
+			ig_dprsr_md.drop_ctl = 0;
+		}
+		else if (hdr.ethernet.isValid())
 		{
 			/* Ethernet switch */
 			switching_table_src.apply();

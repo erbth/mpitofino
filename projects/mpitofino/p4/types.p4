@@ -20,6 +20,8 @@ struct my_ingress_headers_t {
 }
 
 struct my_ingress_metadata_t {
+	cpoffload_h cpoffload;
+
 	/* S.t. the ingress port will be available in the deparser. */
 	PortId_t ingress_port;
 	bit<1> handled;  // no further processing required

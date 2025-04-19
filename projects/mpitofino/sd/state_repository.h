@@ -32,6 +32,9 @@ protected:
 	 * are derived (e.g. addresses per port etc.) */
 	MacAddr base_mac_addr{"02:80:00:00:00:00"};
 	IPv4Addr collectives_module_ip_addr{"10.10.128.0"};
+	IPv4Addr collectives_module_broadcast_addr{"10.10.255.255"};
+
+	IPv4Addr control_ip_addr{"172.18.0.11"};
 
 public:
 	void switching_table_add_entry(const MacAddr& addr, uint16_t port);
@@ -49,6 +52,10 @@ public:
 
 	/* IP-address of the collectives module */
 	IPv4Addr get_collectives_module_ip_addr();
+	IPv4Addr get_collectives_module_broadcast_addr();
+
+	/* IP-address of the control plane */
+	IPv4Addr get_control_ip_addr();
 };
 
 #endif /* __STATE_REPOSITORY_H */

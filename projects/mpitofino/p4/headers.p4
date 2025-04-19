@@ -14,6 +14,11 @@ enum bit<8> ipv4_protocol_t {
 	UDP  = 0x11
 }
 
+/* 'Offloading' packets to/from the control plane */
+header cpoffload_h {
+	bit<16> port_id;
+}
+
 header ethernet_h {
 	mac_addr_t		dst_addr;
 	mac_addr_t		src_addr;

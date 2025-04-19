@@ -5,8 +5,9 @@ add_executable(mpitofino-sd
 	asic_driver.cc
 	../common/epoll.cc
 	../common/signalfd.cc
-	../common/utils.cc
 	../common/simple_types.cc
+	../common/timerfd.cc
+	../common/utils.cc
 )
 
 target_include_directories(mpitofino-sd PRIVATE
