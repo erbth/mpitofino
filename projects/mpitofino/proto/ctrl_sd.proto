@@ -1,0 +1,36 @@
+/* nd-sd */
+syntax = "proto3";
+import "common.proto";
+
+package proto.ctrl_sd;
+
+message GetChannel {
+	/* IMPROVE: Use an aggregation group id instead and create an
+	initial aggration group (that can be splitted) explicitely for QoS
+	*/
+	repeated uint64 agg_group_client_ids = 1;
+
+	uint64 client_id = 2;
+	uint64 tag = 3;  // Unique through the entire cluster; e.g. a tuple (application id, MPI tag)
+
+	ChannelType type = 4;
+
+	/* Client-'portal' for dataplane traffic */
+	uint32 client_port = 5;
+	uint32 client_ip = 6;
+}
+
+message GetChannelResponse {
+	uint64 client_id = 1;
+	uint64 tag = 2;
+
+	uint32 fabric_ip = 3;
+	uint32 fabric_port = 4;
+}
+
+
+message NdRequest {
+	oneof messages {
+		GetChannel get_channel = 1;
+	}
+}

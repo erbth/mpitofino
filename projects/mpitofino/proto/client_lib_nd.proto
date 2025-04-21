@@ -1,20 +1,21 @@
-/* Retrieve/allocate a channel */
-enum ChannelType {
-	ALLREDUCE_INT32 = 0;
-}
+syntax = "proto3";
+import "common.proto";
 
 /* Request-response pairs initiated by client */
 message GetChannel {
-	required ChannelType type = 1;
-	required uint64 tag = 2;  // Unique through the entire clustern; e.g. a tuple (application id, MPI tag)
+	repeated uint64 agg_group_client_ids = 1;
+
+	uint64 client_id = 2;
+	ChannelType type = 3;
+	uint64 tag = 4;  // Unique through the entire cluster; e.g. a tuple (application id, MPI tag)
 }
 
 message GetChannelResponse {
-	required uint32 local_ip = 2;
-	required uint32 local_port = 3;
+	uint32 local_ip = 2;
+	uint32 local_port = 3;
 
-	required uint32 fabric_ip = 4;
-	required uint32 fabric_port = 5;
+	uint32 fabric_ip = 4;
+	uint32 fabric_port = 5;
 }
 
 

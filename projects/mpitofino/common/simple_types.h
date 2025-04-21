@@ -97,6 +97,11 @@ struct IPv4Addr
 	{
 		return memcmp(addr, o.addr, 4) == 0;
 	}
+
+	inline bool is_0000() const
+	{
+		return addr[0] == 0 && addr[1] == 0 && addr[2] == 0 && addr[3] == 0;
+	}
 }
 __attribute__((__packed__));
 

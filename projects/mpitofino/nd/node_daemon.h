@@ -8,6 +8,7 @@
 #include "common/epoll.h"
 #include "common/signalfd.h"
 #include "common/utils.h"
+#include "common/simple_types.h"
 #include "client_lib_nd.pb.h"
 
 extern "C" {
@@ -37,12 +38,24 @@ protected:
 	SignalFD sfd{{SIGINT, SIGTERM}, epoll,
 		         std::bind_front(&NodeDaemon::on_signal, this)};
 
-	/* FD for Unix domain socket for local communication */
+	/* Unix domain socket for local communication */
 	std::filesystem::path service_socket_path;
-	WrappedFD service_fd;
+	WrappedFD service_wfd;
 
-	/* High performance network */
-	struct sockaddr_in hpn_node_addr;
+	/* High performance network (hpn) */
+	struct sockaddr_in hpn_node_addr{};
+
+	/* UDP socket to receive TDP PDUs */
+	WrappedFD tdp_wfd;
+
+	/* The hpn switch to which this node is connected. If the switch *
+	 * is not known (yet), this shall be 0.0.0.0. */
+	IPv4Addr nearest_switch_ip;
+	int switch_port{};
+
+	/* The connection to the nearest switch; i.e. the connection to
+	the rest of the control plane */
+	WrappedFD switch_wfd;
 
 
 	bool running = true;
@@ -57,6 +70,17 @@ protected:
 
 	void on_client_fd(Client* c, int fd, uint32_t events);
 	void on_client_get_channel(Client* c, const GetChannel& msg);
+
+
+	/* Topology discovery/change */
+	void initialize_tdp();
+	void on_tdp_fd(int _fd, uint32_t events);
+
+	void switch_changed();
+	void connect_to_switch();
+	void disconnect_from_switch();
+
+	void on_switch_fd(int fd, uint32_t events);
 
 
 public:

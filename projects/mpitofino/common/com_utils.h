@@ -6,6 +6,7 @@
 #include <system_error>
 #include <google/protobuf/message.h>
 #include "common/utils.h"
+#include "common/dynamic_buffer.h"
 
 extern "C" {
 #include <unistd.h>
@@ -38,6 +39,27 @@ T recv_protobuf_message_simple_dgram(int fd)
 
 	auto ret = check_syscall(
 		read(fd, buf, sizeof(buf)),
+		"recv_protobuf_message_simple_dgram::read");
+
+	if (ret == sizeof(buf))
+		throw std::runtime_error("recv_protobuf_message_simple_dgram: message too large");
+
+	T msg;
+	if (!msg.ParseFromArray(buf, ret))
+		throw std::runtime_error("Failed to receive message");
+
+	return msg;
+}
+
+/* Features message size detection */
+template<class T>
+T recv_protobuf_message_simple_stream(int fd)
+{
+	dynamic_buffer buf;
+	buf.ensure_size(128);
+
+	auto ret = check_syscall(
+		read(fd, buf.ptr(), buf.size()),
 		"recv_protobuf_message_simple_dgram::read");
 
 	if (ret == sizeof(buf))

@@ -1,8 +1,11 @@
 #include <algorithm>
 #include <cstdlib>
+#include <cstring>
 #include <stdexcept>
 #include <vector>
 #include "common/com_utils.h"
+#include "common/packet_headers.h"
+#include "ctrl_sd.pb.h"
 #include "node_daemon.h"
 
 extern "C" {
@@ -10,7 +13,10 @@ extern "C" {
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <ifaddrs.h>
+#include <arpa/inet.h>
 #include <net/if.h>
+#include <netinet/in.h>
+#include <netinet/udp.h>
 }
 
 using namespace std;
@@ -67,8 +73,8 @@ NodeDaemon::NodeDaemon()
 
 	for (const auto& s : socket_cand)
 	{
-		WrappedFD fd;
-		fd.set_errno(
+		WrappedFD wfd;
+		wfd.set_errno(
 			socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0),
 			"socket(AF_UNIX)");
 
@@ -97,7 +103,7 @@ NodeDaemon::NodeDaemon()
 		strncpy(addr.sun_path, s.c_str(), sizeof(addr.sun_path));
 		addr.sun_path[sizeof(addr.sun_path) - 1] = '\0';
 
-		if (::bind(fd.get_fd(), (struct sockaddr*) &addr, sizeof(addr)) < 0)
+		if (::bind(wfd.get_fd(), (struct sockaddr*) &addr, sizeof(addr)) < 0)
 		{
 			if (errno == EACCES)
 				continue;
@@ -106,22 +112,24 @@ NodeDaemon::NodeDaemon()
 		}
 
 		/* Listen */
-		check_syscall(listen(fd.get_fd(), 10), "listen(unix domain socket)");
+		check_syscall(listen(wfd.get_fd(), 10), "listen(unix domain socket)");
 
 		/* Socket ready */
-		service_fd = move(fd);
+		service_wfd = move(wfd);
 		service_socket_path = s;
 	}
 
-	if (!service_fd)
+	if (!service_wfd)
 		throw runtime_error("Unable to find suitable unix domain socket path.");
 
 	fprintf(stderr, "Using unix domain socket at `%s'.\n",
 			service_socket_path.c_str());
 
 	/* Add socket to epoll instance */
-	epoll.add_fd(service_fd.get_fd(), EPOLLIN,
+	epoll.add_fd(service_wfd.get_fd(), EPOLLIN,
 				 bind_front(&NodeDaemon::on_client_conn, this));
+
+	initialize_tdp();
 }
 
 
@@ -203,18 +211,150 @@ void NodeDaemon::on_client_fd(Client* c, int fd, uint32_t events)
 
 void NodeDaemon::on_client_get_channel(Client* c, const GetChannel& msg)
 {
-	/* TODO: Request channel from switch */
+	/* If the switch is not known yet, ignore the request (IMPROVE:
+	 * delay the request until the switch is known) */
+	if (nearest_switch_ip.is_0000())
+		return;
+	
+
+	/* Allocate local port */
+	/* TODO: Implement allocator */
+	uint16_t local_port = 0x4000;
+
+	/* Request channel from switch */
+	proto::ctrl_sd::GetChannel switch_req;
+	copy(
+		msg.agg_group_client_ids().begin(), msg.agg_group_client_ids().end(),
+		switch_req.mutable_agg_group_client_ids()->begin());
+	
+	switch_req.set_client_id(msg.client_id());
+	switch_req.set_tag(msg.tag());
+	switch_req.set_type(msg.type());
+
+	switch_req.set_client_port(local_port);
+	switch_req.set_client_ip(hpn_node_addr.sin_addr.s_addr);
+
+	send_protobuf_message_simple(switch_wfd.get_fd(), switch_req);
+
+	/* Wait for reply */
+	getchar();
+
 	
 	/* Reply */
 	GetChannelResponse reply;
 
-	reply.set_local_port(0x2000);
+	reply.set_local_port(local_port);
 	reply.set_local_ip(hpn_node_addr.sin_addr.s_addr);
 
-	reply.set_fabric_port(0x4000);
+	reply.set_fabric_port(0x6000);
 	reply.set_fabric_ip(0x0a0a8000);
 
 	send_protobuf_message_simple(c->get_fd(), reply);
+}
+
+
+void NodeDaemon::initialize_tdp()
+{
+	tdp_wfd.set_errno(socket(AF_INET, SOCK_DGRAM, 0), "socket(udp for tdp)");
+
+	/* Bind socket */
+	/* IMPROVE: The socket should only listen on the interface on the
+	high performance network */
+	struct sockaddr_in addr = {
+		.sin_family = AF_INET,
+		.sin_port = htons(UDP_PORT_TDP)
+	};
+
+	addr.sin_addr.s_addr = INADDR_ANY;
+
+	check_syscall(
+		bind(tdp_wfd.get_fd(), (struct sockaddr*) &addr, sizeof(addr)),
+		"bind(udp for tdp)");
+
+	/* Add to epoll instance */
+	epoll.add_fd(tdp_wfd.get_fd(), EPOLLIN,
+				 bind_front(&NodeDaemon::on_tdp_fd, this));
+}
+
+
+void NodeDaemon::on_tdp_fd(int _fd, uint32_t events)
+{
+	char buf[128];
+
+	auto ret = check_syscall(
+		read(tdp_wfd.get_fd(), buf, sizeof(buf)),
+		"read(tdp)");
+
+	if (ret != sizeof(TDPHdr))
+	{
+		fprintf(stderr, "Received invalid TDP PDU\n");
+		return;
+	}
+
+	const auto& tdp_hdr = *reinterpret_cast<const TDPHdr*>(buf);
+
+	if (nearest_switch_ip != tdp_hdr.ctrl_ip && !nearest_switch_ip.is_0000())
+		switch_changed();
+
+	switch_port = tdp_hdr.port;
+	nearest_switch_ip = tdp_hdr.ctrl_ip;
+
+	printf("New nearest switch: %s\n", to_string(nearest_switch_ip).c_str());
+
+	connect_to_switch();
+
+	/* TODO: forward port to TM */
+}
+
+
+void NodeDaemon::switch_changed()
+{
+	throw runtime_error("Nearest switch changed; this is not supported yet.");
+}
+
+
+void NodeDaemon::connect_to_switch()
+{
+	WrappedFD wfd;
+
+	wfd.set_errno(socket(AF_INET, SOCK_STREAM, 0), "socket(control plane)");
+
+	struct sockaddr_in addr = {
+		.sin_family = AF_INET,
+		.sin_port = htons(TCP_PORT_CTRL_COLL)
+	};
+	memcpy(&addr.sin_addr.s_addr, &nearest_switch_ip, sizeof(nearest_switch_ip));
+
+	check_syscall(
+		connect(wfd.get_fd(), (struct sockaddr*) &addr, sizeof(addr)),
+		"connect(control plane)");
+
+	/* Add socket to epoll instance */
+	epoll.add_fd(wfd.get_fd(), EPOLLIN | EPOLLHUP | EPOLLRDHUP,
+				 bind_front(&NodeDaemon::on_switch_fd, this));
+
+	switch_wfd = move(wfd);
+}
+
+void NodeDaemon::disconnect_from_switch()
+{
+	throw runtime_error("Disconnecting from the switch during runtime is not "
+						"supported yet.");
+}
+
+
+void NodeDaemon::on_switch_fd(int fd, uint32_t events)
+{
+	bool disconnect = events & (EPOLLHUP | EPOLLRDHUP);
+	
+	if (events & EPOLLIN)
+	{
+		/* IMPROVE: Support requests from the switch */
+		throw runtime_error("not implemented");
+	}
+
+	if (disconnect)
+		disconnect_from_switch();
 }
 
 

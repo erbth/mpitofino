@@ -1,6 +1,7 @@
 add_library(mpitofino SHARED
 	mpitofino.cc
 	"${CMAKE_CURRENT_BINARY_DIR}/proto_out/client_lib_nd.pb.cc"
+	"${CMAKE_CURRENT_BINARY_DIR}/proto_out/common.pb.cc"
 )
 
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/proto_out/")
@@ -10,6 +11,14 @@ add_custom_command(
 		protoc --proto_path "${CMAKE_SOURCE_DIR}/proto/" client_lib_nd.proto
 		--cpp_out "${CMAKE_CURRENT_BINARY_DIR}/proto_out/"
 	DEPENDS "${CMAKE_SOURCE_DIR}/proto/client_lib_nd.proto")
+
+add_custom_command(
+	OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/proto_out/common.pb.cc"
+	COMMAND
+		protoc --proto_path "${CMAKE_SOURCE_DIR}/proto/" common.proto
+		--cpp_out "${CMAKE_CURRENT_BINARY_DIR}/proto_out/"
+	DEPENDS "${CMAKE_SOURCE_DIR}/proto/common.proto")
+
 
 target_compile_options(mpitofino PRIVATE -pthread)
 

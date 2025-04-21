@@ -1,0 +1,7 @@
+/* Common protobuf elements */
+syntax = "proto3";
+
+/* Retrieve/allocate a channel */
+enum ChannelType {
+	ALLREDUCE_INT32 = 0;
+}

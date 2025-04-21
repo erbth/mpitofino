@@ -3,6 +3,10 @@
 #define __COMMON_PACKET_HEADERS_H
 
 #include <cstdint>
+#include "common/simple_types.h"
+
+
+#define TCP_PORT_CTRL_COLL 11000
 
 
 #define UDP_PORT_TDP 0x2000
