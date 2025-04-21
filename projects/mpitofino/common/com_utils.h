@@ -1,6 +1,7 @@
 #ifndef __COMMON_COM_UTILS_H
 #define __COMMON_COM_UTILS_H
 
+#include <cstdint>
 #include <string>
 #include <stdexcept>
 #include <system_error>
@@ -9,29 +10,31 @@
 #include "common/dynamic_buffer.h"
 
 extern "C" {
+#include <endian.h>
 #include <unistd.h>
 }
 
 
-void send_protobuf_message_simple(int fd, const google::protobuf::Message& msg)
+/* Work only for DGRAM/SEQPKT based sockets (because it requires fixed
+datagram size semantics) */
+void send_protobuf_message_simple_dgram(int fd, const google::protobuf::Message& msg)
 {
 	std::string s;
 	if (!msg.SerializeToString(&s))
 		throw std::invalid_argument("Failed to serialize message");
 
-	for (size_t pos = 0; pos < s.size(); pos++)
-	{
-		auto ret = check_syscall(
-			write(fd, s.c_str() + pos, s.size() - pos),
-			"send_protobuf_message_simple::write");
+	auto ret = check_syscall(
+		write(fd, s.c_str(), s.size()),
+		"send_protobuf_message_simple_dgram::write");
 
-		pos += ret;
+	if (ret != (ssize_t) s.size())
+	{
+		throw std::runtime_error(
+			"send_protobuf_message_simple_dgram::write wrote less bytes to "
+			"dgram transport than requested");
 	}
 }
 
-
-/* Works only for DGRAM/SEQPKT based sockets (because it requires
-fixed datagram size semantics) */
 template<class T>
 T recv_protobuf_message_simple_dgram(int fd)
 {
@@ -51,22 +54,61 @@ T recv_protobuf_message_simple_dgram(int fd)
 	return msg;
 }
 
-/* Features message size detection */
+
+/* Feature message size encoding for stream transports */
+void send_protobuf_message_simple_stream(int fd, const google::protobuf::Message& msg)
+{
+	std::string s;
+	if (!msg.SerializeToString(&s))
+		throw std::invalid_argument("Faled to serialize message");
+
+	/* Write length */
+	uint32_t length = htobe32(s.size());
+	if (check_syscall(write(fd, &length, sizeof(length)), "write") != sizeof(length))
+		throw std::runtime_error("failed to write message length");
+
+	for (size_t pos = 0; pos < s.size();)
+	{
+		auto ret = check_syscall(
+			write(fd, s.c_str() + pos, s.size() - pos),
+			"write");
+
+		pos += ret;
+	}
+}
+
 template<class T>
 T recv_protobuf_message_simple_stream(int fd)
 {
+	uint32_t length;
+	
+	/* Read message size */
+	for (size_t pos = 0; pos < sizeof(length);)
+	{
+		auto ret = check_syscall(
+			read(fd, (char*) &length + pos, sizeof(length) - pos),
+			"read");
+
+		pos += ret;
+	}
+
+	length = be32toh(length);
+
+	/* Read message */
 	dynamic_buffer buf;
-	buf.ensure_size(128);
+	buf.ensure_size(length);
 
-	auto ret = check_syscall(
-		read(fd, buf.ptr(), buf.size()),
-		"recv_protobuf_message_simple_dgram::read");
+	for (size_t pos = 0; pos < length;)
+	{
+		auto ret = check_syscall(
+			read(fd, buf.ptr() + pos, length - pos),
+			"read");
 
-	if (ret == sizeof(buf))
-		throw std::runtime_error("recv_protobuf_message_simple_dgram: message too large");
+		pos += ret;
+	}
 
 	T msg;
-	if (!msg.ParseFromArray(buf, ret))
+	if (!msg.ParseFromArray(buf.ptr(), length))
 		throw std::runtime_error("Failed to receive message");
 
 	return msg;

@@ -234,7 +234,7 @@ void NodeDaemon::on_client_get_channel(Client* c, const GetChannel& msg)
 	switch_req.set_client_port(local_port);
 	switch_req.set_client_ip(hpn_node_addr.sin_addr.s_addr);
 
-	send_protobuf_message_simple(switch_wfd.get_fd(), switch_req);
+	send_protobuf_message_simple_dgram(switch_wfd.get_fd(), switch_req);
 
 	/* Wait for reply */
 	getchar();
@@ -249,7 +249,7 @@ void NodeDaemon::on_client_get_channel(Client* c, const GetChannel& msg)
 	reply.set_fabric_port(0x6000);
 	reply.set_fabric_ip(0x0a0a8000);
 
-	send_protobuf_message_simple(c->get_fd(), reply);
+	send_protobuf_message_simple_dgram(c->get_fd(), reply);
 }
 
 

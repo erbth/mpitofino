@@ -6,6 +6,7 @@
 #include "common/simple_types.h"
 
 
+/* IMPROVE: Should be in a separate header... */
 #define TCP_PORT_CTRL_COLL 11000
 
 

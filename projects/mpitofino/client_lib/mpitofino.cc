@@ -156,7 +156,7 @@ CollectiveChannel* AggregationGroup::get_channel(tag_t tag)
 	auto msg = req.mutable_get_channel();
 	msg->set_type(ChannelType::ALLREDUCE_INT32);
 	msg->set_tag(tag);
-	send_protobuf_message_simple(client.get_nd_fd(), req);
+	send_protobuf_message_simple_dgram(client.get_nd_fd(), req);
 
 
 	/* Parse response */

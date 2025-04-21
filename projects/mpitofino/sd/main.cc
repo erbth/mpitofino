@@ -6,6 +6,7 @@
 #include "state_repository.h"
 #include "packet_processor.h"
 #include "asic_driver.h"
+#include "distributed_control_plane_agent.h"
 
 using namespace std;
 
@@ -36,6 +37,7 @@ void main_exc()
 	StateRepository state_repository;
 	PacketProcessor packet_processor(state_repository, epoll);
 	ASICDriver asic_driver(state_repository);
+	distributed_control_plane_agent::Agent dcp_agent(state_repository, epoll);
 
 
 	/* Main loop */

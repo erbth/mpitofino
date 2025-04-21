@@ -8,6 +8,13 @@
 #include <stdexcept>
 #include <string>
 
+extern "C" {
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/ip.h>
+}
+
+
 struct MacAddr
 {
 	uint8_t addr[6]{};
@@ -151,5 +158,7 @@ inline std::string to_string(const IPv4Addr& addr)
 }
 
 std::string to_string(const EthernetHdr& e);
+
+std::string to_string(const struct sockaddr_in& addr);
 
 #endif  /* __COMMON_SIMPLE_TYPES_H */
