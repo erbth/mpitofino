@@ -18,6 +18,8 @@ message GetChannel {
 	/* Client-'portal' for dataplane traffic */
 	uint32 client_port = 5;
 	uint32 client_ip = 6;
+	uint64 client_mac = 7;
+	uint32 switch_port = 8;
 }
 
 message GetChannelResponse {

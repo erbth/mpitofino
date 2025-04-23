@@ -66,7 +66,8 @@ inline void convert_endianess(const void* src, void* dst, size_t size, datatype_
 
 
 /* Client */
-Client::Client()
+Client::Client(uint64_t client_id)
+	: client_id(client_id)
 {
 	GOOGLE_PROTOBUF_VERIFY_VERSION;
 
@@ -131,8 +132,9 @@ CollectiveChannel::CollectiveChannel(
 
 
 /* Aggregation group */
-AggregationGroup::AggregationGroup(Client& client)
-	: client(client)
+AggregationGroup::AggregationGroup(
+		Client& client, const vector<uint64_t>& client_ids)
+	: client(client), client_ids(client_ids)
 {
 }
 
@@ -154,6 +156,12 @@ CollectiveChannel* AggregationGroup::get_channel(tag_t tag)
 	/* Request a collective channel from the node daemon */
 	ClientRequest req;
 	auto msg = req.mutable_get_channel();
+
+	for (auto id : client_ids)
+		msg->add_agg_group_client_ids(id);
+
+	msg->set_client_id(client.client_id);
+
 	msg->set_type(ChannelType::ALLREDUCE_INT32);
 	msg->set_tag(tag);
 	send_protobuf_message_simple_dgram(client.get_nd_fd(), req);
@@ -173,7 +181,7 @@ CollectiveChannel* AggregationGroup::get_channel(tag_t tag)
 		.sin_family = AF_INET,
 		.sin_port = htons(reply.fabric_port())
 	};
-	addr.sin_addr.s_addr = htonl(reply.fabric_ip());
+	addr.sin_addr.s_addr = reply.fabric_ip();
 	fabric_addrs.push_back(addr);
 
 

@@ -40,13 +40,18 @@ int main(int argc, char** argv)
 
 	printf("Node id: %lu\n", (unsigned long) node_id);
 
+	/* Build a list of all client ids of this aggregation group */
+	vector<uint64_t> client_ids;
+	for (uint64_t i = 1; i < cnt_nodes + 1; i++)
+		client_ids.push_back(i);
+
 	/* Create a libmpitofino client and aggregation group */
-	mpitofino::Client client;
-	mpitofino::AggregationGroup agg_group(client);
+	mpitofino::Client client(node_id);
+	mpitofino::AggregationGroup agg_group(client, client_ids);
 
 
 	/* Perform an allreduce operation */
-	const size_t cnt_elem = 256 * 1024;
+	const size_t cnt_elem = 256 * 2;
 	int32_t* sbuf =     (int32_t*) aligned_alloc(256, cnt_elem * sizeof(int32_t));
 	int32_t* dbuf =     (int32_t*) aligned_alloc(256, cnt_elem * sizeof(int32_t));
 	int32_t* expected = (int32_t*) aligned_alloc(256, cnt_elem * sizeof(int32_t));

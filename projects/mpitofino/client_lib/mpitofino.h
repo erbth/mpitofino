@@ -40,7 +40,11 @@ protected:
 	WrappedFD nd_wfd;
 
 public:
-	Client();
+	const uint64_t client_id;
+	
+	/* @param client_id must be unique across the cluster, e.g. a
+	tuple (application id, MPI tag) */
+	Client(uint64_t client_id);
 	~Client();
 
 	Client(Client&&) = delete;
@@ -74,13 +78,16 @@ class AggregationGroup final
 protected:
 	Client& client;
 
+	/* Participating node ids */
+	std::vector<uint64_t> client_ids;
+	
 	/* Collective channels */
 	std::map<tag_t, CollectiveChannel> channels;
 
 	CollectiveChannel* get_channel(tag_t tag);
 
 public:
-	AggregationGroup(Client& client);
+	AggregationGroup(Client& client, const std::vector<uint64_t>& client_ids);
 
 	~AggregationGroup();
 

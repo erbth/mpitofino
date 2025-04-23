@@ -44,6 +44,7 @@ protected:
 
 	/* High performance network (hpn) */
 	struct sockaddr_in hpn_node_addr{};
+	MacAddr hpn_node_mac;
 
 	/* UDP socket to receive TDP PDUs */
 	WrappedFD tdp_wfd;

@@ -10,6 +10,7 @@
 
 extern "C" {
 #include <unistd.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <ifaddrs.h>
@@ -39,6 +40,10 @@ NodeDaemon::NodeDaemon()
 
 	FINALLY(
 	{
+		/* Only used to access ioctls */
+		WrappedFD aux_sock;
+		aux_sock.set_errno(socket(AF_INET, SOCK_DGRAM, 0), "socket");
+
 		for (auto i = ifa; i != nullptr; i = i->ifa_next)
 		{
 			if (!(i->ifa_flags & IFF_UP))
@@ -54,6 +59,17 @@ NodeDaemon::NodeDaemon()
 				continue;
 
 			hpn_node_addr = *((struct sockaddr_in*) i->ifa_addr);
+
+			/* Query MAC address of interface */
+			struct ifreq req{};
+			memcpy(req.ifr_name, i->ifa_name, max(strlen(i->ifa_name), (size_t) IFNAMSIZ));
+			req.ifr_name[IFNAMSIZ - 1] = '\0';
+
+			check_syscall(
+				ioctl(aux_sock.get_fd(), SIOCGIFHWADDR, &req),
+				"ioctl(SIOCGIFHWADDR)");
+
+			memcpy(&hpn_node_mac, req.ifr_hwaddr.sa_data, sizeof(hpn_node_mac));
 		}
 	},
 	{
@@ -222,22 +238,36 @@ void NodeDaemon::on_client_get_channel(Client* c, const GetChannel& msg)
 	uint16_t local_port = 0x4000;
 
 	/* Request channel from switch */
-	proto::ctrl_sd::GetChannel switch_req;
-	copy(
-		msg.agg_group_client_ids().begin(), msg.agg_group_client_ids().end(),
-		switch_req.mutable_agg_group_client_ids()->begin());
+	proto::ctrl_sd::NdRequest switch_req;
+	auto sgc = switch_req.mutable_get_channel();
 	
-	switch_req.set_client_id(msg.client_id());
-	switch_req.set_tag(msg.tag());
-	switch_req.set_type(msg.type());
+	for (auto& cid : msg.agg_group_client_ids())
+		sgc->add_agg_group_client_ids(cid);
+	
+	sgc->set_client_id(msg.client_id());
+	sgc->set_tag(msg.tag());
+	sgc->set_type(msg.type());
 
-	switch_req.set_client_port(local_port);
-	switch_req.set_client_ip(hpn_node_addr.sin_addr.s_addr);
+	uint64_t client_mac;
+	memcpy(&client_mac, &hpn_node_mac, sizeof(hpn_node_mac));
 
-	send_protobuf_message_simple_dgram(switch_wfd.get_fd(), switch_req);
+	sgc->set_client_port(local_port);
+	sgc->set_client_ip(hpn_node_addr.sin_addr.s_addr);
+	sgc->set_client_mac(client_mac);
+	sgc->set_switch_port(switch_port);
+
+	send_protobuf_message_simple_stream(switch_wfd.get_fd(), switch_req);
+
 
 	/* Wait for reply */
-	getchar();
+	auto switch_resp = recv_protobuf_message_simple_stream<
+		proto::ctrl_sd::GetChannelResponse>(switch_wfd.get_fd());
+
+	if (switch_resp.client_id() != msg.client_id() ||
+		switch_resp.tag() != msg.tag())
+	{
+		throw runtime_error("Invalid response from switch");
+	}
 
 	
 	/* Reply */
@@ -246,8 +276,8 @@ void NodeDaemon::on_client_get_channel(Client* c, const GetChannel& msg)
 	reply.set_local_port(local_port);
 	reply.set_local_ip(hpn_node_addr.sin_addr.s_addr);
 
-	reply.set_fabric_port(0x6000);
-	reply.set_fabric_ip(0x0a0a8000);
+	reply.set_fabric_port(switch_resp.fabric_port());
+	reply.set_fabric_ip(switch_resp.fabric_ip());
 
 	send_protobuf_message_simple_dgram(c->get_fd(), reply);
 }
@@ -293,10 +323,13 @@ void NodeDaemon::on_tdp_fd(int _fd, uint32_t events)
 
 	const auto& tdp_hdr = *reinterpret_cast<const TDPHdr*>(buf);
 
-	if (nearest_switch_ip != tdp_hdr.ctrl_ip && !nearest_switch_ip.is_0000())
+	if (nearest_switch_ip == tdp_hdr.ctrl_ip)
+		return;
+	
+	if (!nearest_switch_ip.is_0000())
 		switch_changed();
 
-	switch_port = tdp_hdr.port;
+	switch_port = ntohs(tdp_hdr.port);
 	nearest_switch_ip = tdp_hdr.ctrl_ip;
 
 	printf("New nearest switch: %s\n", to_string(nearest_switch_ip).c_str());
