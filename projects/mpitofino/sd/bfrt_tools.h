@@ -123,9 +123,9 @@ void table_data_set_value(
 }
 
 template<>
-void table_data_set_value<uint8_t*>(
+void table_data_set_value<const uint8_t*>(
 		BfRtTableData& data, bf_rt_id_t field_id,
-		const table_field_desc_t<uint8_t*>& arg)
+		const table_field_desc_t<const uint8_t*>& arg)
 {
 	check_bf_status(
 			data.setValue(field_id, arg.value, arg.size),

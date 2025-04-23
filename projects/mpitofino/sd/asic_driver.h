@@ -22,7 +22,7 @@ protected:
 	static constexpr int  MCAST_BCAST = 2;  // All ports, including CPU, e.g. for ff:ff:ff:ff:ff:ff
 
 
-	StateRepository& state_repo;
+	StateRepository& st_repo;
 
 	/* bf_switchd config; strings must live as long as the context */
 	std::string sde_install;
@@ -49,6 +49,11 @@ protected:
 	const bfrt::BfRtTable* switching_table = nullptr;
 	const bfrt::BfRtTable* switching_table_src = nullptr;
 
+	const bfrt::BfRtTable* collectives_unit_selector = nullptr;
+	const bfrt::BfRtTable* collectives_check_complete = nullptr;
+	const bfrt::BfRtTable* collectives_choose_action[32]{};
+	const bfrt::BfRtTable* collectives_output_address = nullptr;
+
 	bf_status_t eth_switch_learn_cb(
 			const bf_rt_target_t bf_rt_tgt,
 			const std::shared_ptr<bfrt::BfRtSession> session,
@@ -74,8 +79,12 @@ protected:
 	void find_tables();
 	void initial_setup();
 
+
+	/* State changes */
+	void on_st_repo_channels();
+
 public:
-	ASICDriver(StateRepository& state_repo);
+	ASICDriver(StateRepository& st_repo);
 };
 
 #endif /* __ASIC_DRIVER_H */

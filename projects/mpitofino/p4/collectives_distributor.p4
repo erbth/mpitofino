@@ -4,7 +4,7 @@ control CollectivesDistributor(
 	in egress_intrinsic_metadata_t eg_intr_md)
 {
 	/* NOTE: It might be better to factor out the dst_mac resoluation into an
-	 * arp table that can than be used by multiple L3 services implemented in
+	 * arp table that can then be used by multiple L3 services implemented in
 	 * the tofino. */
 	action output_address_set(
 		mac_addr_t src_mac, mac_addr_t dst_mac,
@@ -38,10 +38,10 @@ control CollectivesDistributor(
 
 		size = 1024;
 
-		const entries = {
-			(1, 1) : output_address_set(0x028000000400, 0x525500000015, 0x0a0a8000, 0x0a0a0001, 0x6000, 0x4000);
-			(1, 2) : output_address_set(0x028000000400, 0x525500000014, 0x0a0a8000, 0x0a0a0002, 0x6000, 0x4000);
-		}
+		//const entries = {
+		//	(1, 1) : output_address_set(0x028000000400, 0x525500000015, 0x0a0a8000, 0x0a0a0001, 0x6000, 0x4000);
+		//	(1, 2) : output_address_set(0x028000000400, 0x525500000014, 0x0a0a8000, 0x0a0a0002, 0x6000, 0x4000);
+		//}
 	}
 
 	apply {

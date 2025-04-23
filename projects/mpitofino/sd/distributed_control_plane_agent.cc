@@ -38,6 +38,13 @@ void Agent::initialize_client_interface()
 	WrappedFD wfd;
 	wfd.set_errno(socket(AF_INET, SOCK_STREAM, 0), "socket(tcp)");
 
+	/* Set SO_REUSEADDR */
+	int reuseaddr = 1;
+	check_syscall(
+		setsockopt(wfd.get_fd(), SOL_SOCKET, SO_REUSEADDR,
+				   &reuseaddr, sizeof(reuseaddr)),
+		"setsockopt");
+
 	/* Bind and listen */
 	struct sockaddr_in addr = {
 		.sin_family = AF_INET,
@@ -99,14 +106,21 @@ void Agent::on_client_fd(Client* client, int fd, uint32_t events)
 		been received yet. Maybe use a receive buffer if this becomes
 		a bottleneck. */
 		auto msg = recv_protobuf_message_simple_stream<proto::ctrl_sd::NdRequest>(fd);
-		switch (msg.messages_case())
+		if (msg)
 		{
-		case proto::ctrl_sd::NdRequest::kGetChannel:
-			on_client_get_channel(client, msg.get_channel());
-			break;
+			switch (msg->messages_case())
+			{
+			case proto::ctrl_sd::NdRequest::kGetChannel:
+				on_client_get_channel(client, msg->get_channel());
+				break;
 
-		default:
-			throw runtime_error("Unsupported message from client");
+			default:
+				throw runtime_error("Unsupported message from client");
+			}
+		}
+		else
+		{
+			disconnect = true;
 		}
 	}
 
@@ -130,7 +144,52 @@ void Agent::on_client_fd(Client* client, int fd, uint32_t events)
 
 void Agent::on_client_get_channel(Client* client, const proto::ctrl_sd::GetChannel& msg)
 {
-	printf("get_channel from client\n");
+	/* Check if the channel exists already */
+	auto ch = st_repo.get_channel(msg.tag());
+
+	/* If not, allocate it, otherwise check for matching parameters */
+	if (!ch)
+	{
+		CollectiveChannel c;
+
+		c.tag = msg.tag();
+		c.fabric_ip = st_repo.get_collectives_module_ip_addr();
+		c.fabric_port = st_repo.get_free_coll_port();
+		c.fabric_mac = st_repo.get_collectives_module_mac_addr();
+
+		c.agg_unit = 0;
+
+		for (auto cid : msg.agg_group_client_ids())
+		{
+			CollectiveChannel::Participant p;
+			p.client_id = cid;
+			c.participants.insert({cid, p});
+		}
+
+		c.type = msg.type();
+
+		st_repo.add_channel(c);
+		ch = st_repo.get_channel(c.tag);
+	}
+
+	/* Update client parameters */
+	auto client_ip = msg.client_ip();
+	auto client_mac = msg.client_mac();
+
+	st_repo.update_channel_participant(
+		msg.tag(), msg.client_id(),
+		*reinterpret_cast<IPv4Addr*>(&client_ip), msg.client_port(),
+		*reinterpret_cast<MacAddr*>(&client_mac), msg.switch_port());
+
+	/* Return channel parameters. Note that the ASIC has already been
+	updated synchronously during the st_repo calls above. */
+	proto::ctrl_sd::GetChannelResponse resp;
+	resp.set_client_id(msg.client_id());
+	resp.set_tag(ch->tag);
+	resp.set_fabric_ip(*reinterpret_cast<const uint32_t*>(&ch->fabric_ip));
+	resp.set_fabric_port(ch->fabric_port);
+
+	send_protobuf_message_simple_stream(client->wfd.get_fd(), resp);
 }
 
 

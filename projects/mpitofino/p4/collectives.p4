@@ -53,10 +53,10 @@ control AggregationUnit(
 		/* 1024 units collective channels * 2 options */
 		size = 2048;
 
-		const entries = {
-			(1, false) : agg_int_32_add;
-			(1, true ) : agg_int_32_clear;
-		}
+		//const entries = {
+		//	(1, false) : agg_int_32_add;
+		//	(1, true ) : agg_int_32_clear;
+		//}
 	}
 
 	apply {
@@ -172,12 +172,13 @@ control Collectives(
 
 		default_action = NoAction;
 
+		/* TODO: Adjust all table sizes to match the control plane */
 		size = 2048;
 
-		const entries = {
-			(1, 0x3, 0x0, false) : check_complete_true();
-			(1, _, _, true) : check_complete_clear();
-		}
+		//const entries = {
+		//	(1, 0x3, 0x0, false) : check_complete_true();
+		//	(1, _, _, true) : check_complete_clear();
+		//}
 	}
 
 
@@ -186,8 +187,7 @@ control Collectives(
 	}
 
 	action select_agg_unit(bit<16> mcast_grp, bit<16> agg_unit,
-			bit<32> node_bitmap_low, bit<32> node_bitmap_high,
-			bit<32> full_bitmap_low, bit<32> full_bitmap_high)
+			bit<32> node_bitmap_low, bit<32> node_bitmap_high)
 	{
 		// Setup aggregation configuration
 		ig_tm_md.mcast_grp_a = mcast_grp;
@@ -196,8 +196,6 @@ control Collectives(
 		meta.bridge_header.agg_unit = agg_unit;
 		meta.node_bitmap.low  = node_bitmap_low;
 		meta.node_bitmap.high = node_bitmap_high;
-		meta.full_bitmap.low  = full_bitmap_low;
-		meta.full_bitmap.high = full_bitmap_high;
 
 		meta.handled = 1;
 	}
@@ -217,10 +215,10 @@ control Collectives(
 
 		default_action = no_agg_unit;
 
-		const entries = {
-			(0x0a0a0001, 0x0a0a8000, 0x4000, 0x6000) : select_agg_unit(0x10, 1, 0x1, 0, 0x3, 0);
-			(0x0a0a0002, 0x0a0a8000, 0x4000, 0x6000) : select_agg_unit(0x10, 1, 0x2, 0, 0x3, 0);
-		}
+		//const entries = {
+		//	(0x0a0a0001, 0x0a0a8000, 0x4000, 0x6000) : select_agg_unit(0x10, 1, 0x1, 0);
+		//	(0x0a0a0002, 0x0a0a8000, 0x4000, 0x6000) : select_agg_unit(0x10, 1, 0x2, 0);
+		//}
 
 		size = 1024;
 	}

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <stdexcept>
+#include <memory>
 #include <system_error>
 #include <google/protobuf/message.h>
 #include "common/utils.h"
@@ -77,8 +78,9 @@ void send_protobuf_message_simple_stream(int fd, const google::protobuf::Message
 	}
 }
 
+/* @returns  nullptr in case of EOF */
 template<class T>
-T recv_protobuf_message_simple_stream(int fd)
+std::unique_ptr<T> recv_protobuf_message_simple_stream(int fd)
 {
 	uint32_t length;
 	
@@ -88,6 +90,9 @@ T recv_protobuf_message_simple_stream(int fd)
 		auto ret = check_syscall(
 			read(fd, (char*) &length + pos, sizeof(length) - pos),
 			"read");
+
+		if (ret == 0)
+			return nullptr;
 
 		pos += ret;
 	}
@@ -104,11 +109,14 @@ T recv_protobuf_message_simple_stream(int fd)
 			read(fd, buf.ptr() + pos, length - pos),
 			"read");
 
+		if (ret == 0)
+			return nullptr;
+
 		pos += ret;
 	}
 
-	T msg;
-	if (!msg.ParseFromArray(buf.ptr(), length))
+	auto msg = std::make_unique<T>();
+	if (!msg->ParseFromArray(buf.ptr(), length))
 		throw std::runtime_error("Failed to receive message");
 
 	return msg;

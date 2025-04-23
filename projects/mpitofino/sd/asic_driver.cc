@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <string>
 #include <filesystem>
 #include "common/utils.h"
@@ -9,8 +10,8 @@ using namespace bfrt;
 namespace fs = std::filesystem;
 
 
-ASICDriver::ASICDriver(StateRepository& state_repo)
-	: state_repo(state_repo)
+ASICDriver::ASICDriver(StateRepository& st_repo)
+	: st_repo(st_repo)
 {
 	/* Initialize bf_switchd */
 	switchd_ctx.running_in_background = true;
@@ -56,6 +57,10 @@ ASICDriver::ASICDriver(StateRepository& state_repo)
 
 	/* Perform initial setup */
 	initial_setup();
+
+
+	/* Subscribe to state repository */
+	st_repo.subscribe_channels(bind(&ASICDriver::on_st_repo_channels, this));
 }
 
 void ASICDriver::find_tables()
@@ -68,6 +73,43 @@ void ASICDriver::find_tables()
 	RES_TBL("$pre.mgid", pre_mgid)
 	RES_TBL("Ingress.switching_table", switching_table);
 	RES_TBL("Ingress.switching_table_src", switching_table_src);
+
+	RES_TBL("Ingress.collectives.unit_selector", collectives_unit_selector);
+	RES_TBL("Ingress.collectives.check_complete", collectives_check_complete);
+	RES_TBL("Egress.collectives_distributor.output_address", collectives_output_address);
+
+	RES_TBL("Ingress.collectives.agg00.choose_action", collectives_choose_action[0]);
+	RES_TBL("Ingress.collectives.agg01.choose_action", collectives_choose_action[1]);
+	RES_TBL("Ingress.collectives.agg02.choose_action", collectives_choose_action[2]);
+	RES_TBL("Ingress.collectives.agg03.choose_action", collectives_choose_action[3]);
+	RES_TBL("Ingress.collectives.agg04.choose_action", collectives_choose_action[4]);
+	RES_TBL("Ingress.collectives.agg05.choose_action", collectives_choose_action[5]);
+	RES_TBL("Ingress.collectives.agg06.choose_action", collectives_choose_action[6]);
+	RES_TBL("Ingress.collectives.agg07.choose_action", collectives_choose_action[7]);
+	RES_TBL("Ingress.collectives.agg08.choose_action", collectives_choose_action[8]);
+	RES_TBL("Ingress.collectives.agg09.choose_action", collectives_choose_action[9]);
+	RES_TBL("Ingress.collectives.agg10.choose_action", collectives_choose_action[10]);
+	RES_TBL("Ingress.collectives.agg11.choose_action", collectives_choose_action[11]);
+	RES_TBL("Ingress.collectives.agg12.choose_action", collectives_choose_action[12]);
+	RES_TBL("Ingress.collectives.agg13.choose_action", collectives_choose_action[13]);
+	RES_TBL("Ingress.collectives.agg14.choose_action", collectives_choose_action[14]);
+	RES_TBL("Ingress.collectives.agg15.choose_action", collectives_choose_action[15]);
+	RES_TBL("Ingress.collectives.agg16.choose_action", collectives_choose_action[16]);
+	RES_TBL("Ingress.collectives.agg17.choose_action", collectives_choose_action[17]);
+	RES_TBL("Ingress.collectives.agg18.choose_action", collectives_choose_action[18]);
+	RES_TBL("Ingress.collectives.agg19.choose_action", collectives_choose_action[19]);
+	RES_TBL("Ingress.collectives.agg20.choose_action", collectives_choose_action[20]);
+	RES_TBL("Ingress.collectives.agg21.choose_action", collectives_choose_action[21]);
+	RES_TBL("Ingress.collectives.agg22.choose_action", collectives_choose_action[22]);
+	RES_TBL("Ingress.collectives.agg23.choose_action", collectives_choose_action[23]);
+	RES_TBL("Ingress.collectives.agg24.choose_action", collectives_choose_action[24]);
+	RES_TBL("Ingress.collectives.agg25.choose_action", collectives_choose_action[25]);
+	RES_TBL("Ingress.collectives.agg26.choose_action", collectives_choose_action[26]);
+	RES_TBL("Ingress.collectives.agg27.choose_action", collectives_choose_action[27]);
+	RES_TBL("Ingress.collectives.agg28.choose_action", collectives_choose_action[28]);
+	RES_TBL("Ingress.collectives.agg29.choose_action", collectives_choose_action[29]);
+	RES_TBL("Ingress.collectives.agg30.choose_action", collectives_choose_action[30]);
+	RES_TBL("Ingress.collectives.agg31.choose_action", collectives_choose_action[31]);
 }
 
 void ASICDriver::initial_setup()
@@ -82,6 +124,8 @@ void ASICDriver::initial_setup()
 		for (int j = 0; j < 16; j++)
 			port_ids.push_back(i*128 + j*4);
 	}
+
+	vector<bf_rt_id_t> port_xids(port_ids.cbegin(), port_ids.cend());
 
 	for (auto p : port_ids)
 	{
@@ -102,16 +146,17 @@ void ASICDriver::initial_setup()
 				*table_create_data<vector<bf_rt_id_t>, vector<bool>, vector<bf_rt_id_t>>(
 					pre_mgid,
 					{"$MULTICAST_NODE_ID", port_ids},
-					{"$MULTICAST_NODE_L1_XID_VALID", vector<bool>(port_ids.size(), true)},
-					{"$MULTICAST_NODE_L1_XID", port_ids}
+					{"$MULTICAST_NODE_L1_XID_VALID", vector<bool>(port_xids.size(), true)},
+					{"$MULTICAST_NODE_L1_XID", port_xids}
 				)
 			),
 			"Add entry to table pre.mgid");
 
 	/* Same, but with CPU port for broadcasts */
 	port_ids.push_back(64);
+	port_xids.push_back(64);
 	for (auto& p : port_ids)
-		p |= 0x0400;
+		p |= 0x0200;
 
 	for (auto p : port_ids)
 	{
@@ -121,7 +166,7 @@ void ASICDriver::initial_setup()
 						pre_node,
 						{"$MULTICAST_RID", 1},
 						{"$MULTICAST_LAG_ID", vector<bf_rt_id_t>()},
-						{"$DEV_PORT", vector<bf_rt_id_t>({p})}
+						{"$DEV_PORT", vector<bf_rt_id_t>({p & ~0x200})}
 					)
 				),
 				"Add entry to table pre.node");
@@ -132,43 +177,8 @@ void ASICDriver::initial_setup()
 				*table_create_data<vector<bf_rt_id_t>, vector<bool>, vector<bf_rt_id_t>>(
 					pre_mgid,
 					{"$MULTICAST_NODE_ID", port_ids},
-					{"$MULTICAST_NODE_L1_XID_VALID", vector<bool>(port_ids.size(), true)},
-					{"$MULTICAST_NODE_L1_XID", port_ids}
-				)
-			),
-			"Add entry to table pre.mgid");
-
-
-	/* Create a multicast group for distributing the result of a an example
-	 * collective operation */
-	vector<tuple<bf_rt_id_t, bf_rt_id_t, bf_rt_id_t>> group_ports;
-	group_ports.push_back({0x1000, 0, 1});
-	group_ports.push_back({0x1001, 4, 2});
-
-	port_ids.clear();
-	for (auto [pid, p, rid] : group_ports)
-	{
-		port_ids.push_back(pid);
-
-		check_bf_status(pre_node->tableEntryAdd(*session, dev_tgt,
-					*table_create_key<uint64_t>(pre_node, {"$MULTICAST_NODE_ID", pid}),
-					*table_create_data<uint64_t, vector<bf_rt_id_t>, vector<bf_rt_id_t>>(
-						pre_node,
-						{"$MULTICAST_RID", rid},
-						{"$MULTICAST_LAG_ID", vector<bf_rt_id_t>()},
-						{"$DEV_PORT", vector<bf_rt_id_t>({p})}
-					)
-				),
-				"Add entry to table pre.node");
-	}
-
-	check_bf_status(pre_mgid->tableEntryAdd(*session, dev_tgt,
-				*table_create_key<uint64_t>(pre_mgid, {"$MGID", 0x10}),
-				*table_create_data<vector<bf_rt_id_t>, vector<bool>, vector<bf_rt_id_t>>(
-					pre_mgid,
-					{"$MULTICAST_NODE_ID", port_ids},
-					{"$MULTICAST_NODE_L1_XID_VALID", vector<bool>(port_ids.size(), false)},
-					{"$MULTICAST_NODE_L1_XID", vector<bf_rt_id_t>(port_ids.size(), 0)}
+					{"$MULTICAST_NODE_L1_XID_VALID", vector<bool>(port_xids.size(), true)},
+					{"$MULTICAST_NODE_L1_XID", port_xids}
 				)
 			),
 			"Add entry to table pre.mgid");
@@ -227,7 +237,7 @@ void ASICDriver::initial_setup()
 	/* Add special entries to switching table */
 	update_switching_table(MacAddr("ff:ff:ff:ff:ff:ff"), "Ingress.bcast");
 	update_switching_table(
-			state_repo.get_collectives_module_mac_addr(),
+			st_repo.get_collectives_module_mac_addr(),
 			"Ingress.collective");
 
 	/* Ignore all packets from the CPU port for learning */
@@ -400,4 +410,211 @@ void ASICDriver::update_switching_table(
 				)
 			),
 			"Failed to update entry in switching_table");
+}
+
+
+void ASICDriver::on_st_repo_channels()
+{
+	/* Get channels from st_repo */
+	auto repo_channels = st_repo.get_channels();
+
+	/* Get channels from ASIC */
+	/* TODO */
+
+	/* Add missing channels and client portals on ASIC */
+	for (auto& rc : repo_channels)
+	{
+		uint16_t mcast_grp = 0x10 + rc->agg_unit / 8;
+
+		uint32_t full_bitmap_low = 0;
+		uint32_t full_bitmap_high = 0;
+
+		/* Construct full bitmap */
+		if (rc->participants.size() > 64)
+			throw runtime_error("Too participants in collectives channel.");
+
+		full_bitmap_low = (1ULL << min(rc->participants.size(), 32UL)) - 1;
+		if (rc->participants.size() > 32)
+			full_bitmap_high = (1ULL << (rc->participants.size() - 32)) - 1;
+
+
+		/* Create/update multicast group */
+		vector<bf_rt_id_t> port_ids;
+		vector<tuple<bf_rt_id_t, bf_rt_id_t, bf_rt_id_t>> group_ports;
+
+		size_t pos = 1;
+		for (auto& [ipart,part] : rc->participants)
+		{
+			group_ports.push_back({
+					0x1000 + 0x200 * (rc->agg_unit / 8) + (pos-1),
+					part.switch_port * 4,
+					pos});
+
+			pos++;
+		}
+
+		for (auto [pid, p, rid] : group_ports)
+		{
+			port_ids.push_back(pid);
+
+			check_bf_status(table_add_or_mod(*pre_node, *session, dev_tgt,
+						*table_create_key<uint64_t>(pre_node, {"$MULTICAST_NODE_ID", pid}),
+						*table_create_data<uint64_t, vector<bf_rt_id_t>, vector<bf_rt_id_t>>(
+							pre_node,
+							{"$MULTICAST_RID", rid},
+							{"$MULTICAST_LAG_ID", vector<bf_rt_id_t>()},
+							{"$DEV_PORT", vector<bf_rt_id_t>({p})}
+						)
+					),
+					"Add entry to table pre.node");
+		}
+
+		check_bf_status(table_add_or_mod(*pre_mgid, *session, dev_tgt,
+					*table_create_key<uint64_t>(pre_mgid, {"$MGID", mcast_grp}),
+					*table_create_data<vector<bf_rt_id_t>, vector<bool>, vector<bf_rt_id_t>>(
+						pre_mgid,
+						{"$MULTICAST_NODE_ID", port_ids},
+						{"$MULTICAST_NODE_L1_XID_VALID", vector<bool>(port_ids.size(), false)},
+						{"$MULTICAST_NODE_L1_XID", vector<bf_rt_id_t>(port_ids.size(), 0)}
+					)
+				),
+				"Add entry to table pre.mgid");
+
+
+		/* Construct worker bitmap */
+		uint32_t node_bitmap_low = 1;
+		uint32_t node_bitmap_high = 0;
+		
+		/* Insert participants */
+		pos = 1;
+		for (auto& [ipart,part] : rc->participants)
+		{
+			if (part.ip.is_0000())
+				continue;
+			
+			/* Unit selector */
+			check_bf_status(table_add_or_mod(
+				*collectives_unit_selector, *session, dev_tgt,
+				*table_create_key<const uint8_t*, const uint8_t*, uint64_t, uint64_t>(
+					collectives_unit_selector,
+					{"hdr.ipv4.src_addr",
+					 reinterpret_cast<const uint8_t*>(&part.ip),
+					 sizeof(part.ip)},
+					{"hdr.ipv4.dst_addr",
+					 reinterpret_cast<const uint8_t*>(&rc->fabric_ip),
+					 sizeof(rc->fabric_ip)},
+					{"hdr.udp.src_port", part.port},
+					{"hdr.udp.dst_port", rc->fabric_port}),
+				*table_create_data_action<uint64_t, uint64_t, uint64_t, uint64_t>(
+					collectives_unit_selector, "Ingress.collectives.select_agg_unit",
+					{"mcast_grp", mcast_grp},
+					{"agg_unit", rc->agg_unit},
+					{"node_bitmap_low", node_bitmap_low},
+					{"node_bitmap_high", node_bitmap_high})),
+			"Failed to update Collectives.unit_selector table");
+
+			/* Update worker bitmap */
+			if (node_bitmap_low == (1ULL << 31))
+				node_bitmap_high = 1;
+			else
+				node_bitmap_high <<= 1;
+
+			node_bitmap_low <<= 1;
+
+
+			/* Output address update */
+			check_bf_status(table_add_or_mod(
+				*collectives_output_address, *session, dev_tgt,
+				*table_create_key<uint64_t, uint64_t>(
+					collectives_output_address,
+					{"meta.bridge_header.agg_unit", rc->agg_unit},
+					{"eg_intr_md.egress_rid", pos}),
+				*table_create_data_action<const uint8_t*, const uint8_t*,
+						const uint8_t*, const uint8_t*, uint64_t, uint64_t>(
+					collectives_output_address,
+					"Egress.collectives_distributor.output_address_set",
+					{"src_mac",
+					 reinterpret_cast<const uint8_t*>(&rc->fabric_mac),
+					 sizeof(rc->fabric_mac)},
+					{"dst_mac",
+					 reinterpret_cast<const uint8_t*>(&part.mac),
+					 sizeof(part.mac)},
+					{"src_ip",
+					 reinterpret_cast<const uint8_t*>(&rc->fabric_ip),
+					 sizeof(rc->fabric_ip)},
+					{"dst_ip",
+					 reinterpret_cast<const uint8_t*>(&part.ip),
+					 sizeof(part.ip)},
+					{"src_port", rc->fabric_port},
+					{"dst_port", part.port})),
+			"Failed to update CollectivesDistributor.output_address table");
+
+			pos++;
+		}
+
+		/* Insert or update check_complete/full map */
+		check_bf_status(table_add_or_mod(
+			*collectives_check_complete, *session, dev_tgt,
+			*table_create_key<uint64_t, uint64_t, uint64_t, bool>(
+				collectives_check_complete,
+				{"meta.agg_unit", rc->agg_unit},
+				table_field_desc_t<uint64_t>::create_ternary(
+					"meta.node_bitmap.low", full_bitmap_low, 0xffffffff),
+				table_field_desc_t<uint64_t>::create_ternary(
+					"meta.node_bitmap.high", full_bitmap_high, 0xffffffff),
+				{"meta.agg_is_clear", false}),
+			*table_create_data_action<>(
+				collectives_check_complete,
+				"Ingress.collectives.check_complete_true")),
+		"Failed to update Collectives.check_complete table");
+
+		check_bf_status(table_add_or_mod(
+			*collectives_check_complete, *session, dev_tgt,
+			*table_create_key<uint64_t, uint64_t, uint64_t, bool>(
+				collectives_check_complete,
+				{"meta.agg_unit", rc->agg_unit},
+				table_field_desc_t<uint64_t>::create_ternary(
+					"meta.node_bitmap.low", 0, 0),
+				table_field_desc_t<uint64_t>::create_ternary(
+					"meta.node_bitmap.high", 0, 0),
+				{"meta.agg_is_clear", true}),
+			*table_create_data_action<>(
+				collectives_check_complete,
+				"Ingress.collectives.check_complete_clear")),
+		"Failed to update Collectives.check_complete table");
+
+		/* Insert or update choose_action */
+		for (int i = 0; i < 32; i++)
+		{
+			char buf[3];
+			snprintf(buf, sizeof(buf), "%02d", i);
+			buf[2] = '\0';
+			string istr(buf);
+
+			check_bf_status(table_add_or_mod(
+				*collectives_choose_action[i], *session, dev_tgt,
+				*table_create_key<uint64_t, bool>(
+					collectives_choose_action[i],
+					{"meta.agg_unit", rc->agg_unit},
+					{"meta.agg_is_clear", false}),
+				*table_create_data_action<>(
+					collectives_choose_action[i],
+					("Ingress.collectives.agg" + istr + ".agg_int_32_add").c_str())),
+			"Failed to update Collectives.AggregationUnit.choose_action table");
+
+			check_bf_status(table_add_or_mod(
+				*collectives_choose_action[i], *session, dev_tgt,
+				*table_create_key<uint64_t, bool>(
+					collectives_choose_action[i],
+					{"meta.agg_unit", rc->agg_unit},
+					{"meta.agg_is_clear", true}),
+				*table_create_data_action<>(
+					collectives_choose_action[i],
+					("Ingress.collectives.agg" + istr + ".agg_int_32_clear").c_str())),
+			"Failed to update Collectives.AggregationUnit.choose_action table");
+		}
+	}
+
+	/* Delete excess channels from ASIC */
+	/* TODO */
 }

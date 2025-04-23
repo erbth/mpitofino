@@ -1,45 +1,113 @@
 #include <algorithm>
+#include <stdexcept>
 #include "state_repository.h"
 
+using namespace std;
 
-void StateRepository::switching_table_add_entry(
-	const MacAddr& addr, uint16_t port)
+
+const CollectiveChannel* StateRepository::get_channel(uint64_t tag)
 {
-	switching_table[addr] = port;
+	auto i = channels.find(tag);
+	if (i == channels.end())
+		return nullptr;
+	return &i->second;
 }
 
-void StateRepository::switching_table_remove_entry(const MacAddr& addr)
+vector<const CollectiveChannel*> StateRepository::get_channels()
 {
-	auto i = switching_table.find(addr);
-	if (i != switching_table.end())
-		switching_table.erase(i);
+	vector<const CollectiveChannel*> res;
+
+	for (auto& [t,c] : channels)
+		res.push_back(&c);
+
+	return res;
 }
 
-void StateRepository::switching_table_clear()
+void StateRepository::add_channel(const CollectiveChannel& channel)
 {
-	switching_table.clear();
+	auto [i,inserted] = channels.insert({channel.tag, channel});
+	if (!inserted)
+		throw invalid_argument("channel exists already");
+
+	notify_subscribers(subscribers_channels);
 }
 
-StateRepository::switching_table_t StateRepository::switching_table_get() const
+void StateRepository::update_channel_participant(
+	uint64_t tag, uint64_t client_id, IPv4Addr ip, uint16_t port,
+	MacAddr mac, uint16_t switch_port)
 {
-	return switching_table;
+	auto i = channels.find(tag);
+	if (i == channels.end())
+		throw invalid_argument("No such channel");
+
+	auto& c = i->second;
+
+	auto j = c.participants.find(client_id);
+	if (j == c.participants.end())
+		throw invalid_argument("No such participant in channel");
+
+	auto& p = j->second;
+
+	if (p.ip != ip || p.port != port || p.mac != mac ||
+		p.switch_port != switch_port)
+	{
+		p.ip = ip;
+		p.port = port;
+		p.mac = mac;
+		p.switch_port = switch_port;
+
+		notify_subscribers(subscribers_channels);
+	}
 }
 
-StateRepository::subscription_t
-StateRepository::subscribe_switching_table(subscriber_t s)
+
+uint16_t StateRepository::get_free_coll_port()
 {
-	return reinterpret_cast<void*>(&subscribers_switching_table.emplace_back(s));
+	int cnt_wraps = 0;
+	
+	while (cnt_wraps < 2)
+	{
+		if (next_coll_port < 0x4000 || next_coll_port >= 0x8000)
+		{
+			next_coll_port = 0x4000;
+			cnt_wraps++;
+		}
+
+		auto port = next_coll_port++;
+
+		bool taken = false;
+		for (auto& [t,c] : channels)
+		{
+			if (c.fabric_port == port)
+			{
+				taken = true;
+				break;
+			}
+		}
+
+		if (!taken)
+			return port;
+	}
+
+	throw runtime_error("No free fabric port for collectives");
 }
 
-void StateRepository::unsubscribe_switching_table(subscription_t s)
+
+void* StateRepository::subscribe_channels(subscriber_t sub)
+{
+	return (void*) &subscribers_channels.emplace_back(sub);
+}
+
+void StateRepository::unsubscribe_channels(void* handle)
 {
 	auto i = find_if(
-		subscribers_switching_table.begin(),
-		subscribers_switching_table.end(),
-		[s](auto& e){ return &e == s; });
+		subscribers_channels.begin(), subscribers_channels.end(),
+		[=](auto& s){ return &s == (subscriber_t*) handle; });
 
-	if (i != subscribers_switching_table.end())
-		subscribers_switching_table.erase(i);
+	if (i == subscribers_channels.end())
+		throw invalid_argument("No such subscription");
+
+	subscribers_channels.erase(i);
 }
 
 

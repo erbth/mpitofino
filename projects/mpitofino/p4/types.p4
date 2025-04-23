@@ -29,7 +29,6 @@ struct my_ingress_metadata_t {
 
 	bit<16> agg_unit;
 	node_bitmap_t node_bitmap;
-	node_bitmap_t full_bitmap;
 	bool agg_is_clear;  // set on final recirculation before the result is sent
 
 	bridge_header_t bridge_header;

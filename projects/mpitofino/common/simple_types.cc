@@ -21,5 +21,5 @@ string to_string(const struct sockaddr_in& addr)
 	inet_ntop(AF_INET, &addr.sin_addr, buf, sizeof(buf));
 	buf[sizeof(buf) - 1] = '\0';
 
-	return buf + to_string(ntohs(addr.sin_port));
+	return buf + ":"s + to_string(ntohs(addr.sin_port));
 }

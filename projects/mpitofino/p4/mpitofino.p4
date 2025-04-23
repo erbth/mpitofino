@@ -36,7 +36,6 @@ parser IngressParser(
 		/* Collectives module's state */
 		meta.agg_unit = 65535;
 		meta.node_bitmap = {0, 0};
-		meta.full_bitmap = {0, 0};
 		meta.agg_is_clear = false;
 
 		meta.bridge_header.setValid();
