@@ -263,8 +263,8 @@ void NodeDaemon::on_client_get_channel(Client* c, const GetChannel& msg)
 	auto switch_resp = recv_protobuf_message_simple_stream<
 		proto::ctrl_sd::GetChannelResponse>(switch_wfd.get_fd());
 
-	if (switch_resp.client_id() != msg.client_id() ||
-		switch_resp.tag() != msg.tag())
+	if (switch_resp->client_id() != msg.client_id() ||
+		switch_resp->tag() != msg.tag())
 	{
 		throw runtime_error("Invalid response from switch");
 	}
@@ -276,8 +276,8 @@ void NodeDaemon::on_client_get_channel(Client* c, const GetChannel& msg)
 	reply.set_local_port(local_port);
 	reply.set_local_ip(hpn_node_addr.sin_addr.s_addr);
 
-	reply.set_fabric_port(switch_resp.fabric_port());
-	reply.set_fabric_ip(switch_resp.fabric_ip());
+	reply.set_fabric_port(switch_resp->fabric_port());
+	reply.set_fabric_ip(switch_resp->fabric_ip());
 
 	send_protobuf_message_simple_dgram(c->get_fd(), reply);
 }
