@@ -35,6 +35,8 @@ void main_exc()
 
 	/* Create different components */
 	StateRepository state_repository;
+	state_repository.read_config_file();
+
 	PacketProcessor packet_processor(state_repository, epoll);
 	ASICDriver asic_driver(state_repository);
 	distributed_control_plane_agent::Agent dcp_agent(state_repository, epoll);

@@ -68,16 +68,22 @@ protected:
 	subscriber_list_t subscribers_channels;
 
 
+	/* Also basic switch configuration, but not chassis-dependent */
+	std::string cpu_interface_name;
+	
 	/* Basic switch configuration */
 	/* Meant as base MAC address from which all of the system's MAC addresses
 	 * are derived (e.g. addresses per port etc.) */
-	MacAddr base_mac_addr{"02:80:00:00:00:00"};
-	IPv4Addr collectives_module_ip_addr{"10.10.128.0"};
-	IPv4Addr collectives_module_broadcast_addr{"10.10.255.255"};
+	MacAddr base_mac_addr;
+	IPv4Addr collectives_module_ip_addr;
+	IPv4Addr collectives_module_broadcast_addr;
 
-	IPv4Addr control_ip_addr{"172.18.0.11"};
+	IPv4Addr control_ip_addr;
 
 public:
+	void read_config_file();
+
+
 	/* Collective channels */
 	const CollectiveChannel* get_channel(uint64_t tag);
 	std::vector<const CollectiveChannel*> get_channels();
@@ -95,6 +101,8 @@ public:
 	void unsubscribe_channels(void* handle);
 
 
+	std::string get_cpu_interface_name();
+	
 	MacAddr get_base_mac_addr();
 
 	/* Derived MAC address of the collectives-unit */

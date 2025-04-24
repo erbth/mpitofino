@@ -13,7 +13,6 @@ extern "C" {
 
 using namespace std;
 
-#define CPU_INTERFACE_NAME "cpu_eth_0"
 
 PacketProcessor::PacketProcessor(StateRepository& st_repo, Epoll& epoll)
 	: epoll(epoll), st_repo(st_repo)
@@ -26,7 +25,7 @@ PacketProcessor::PacketProcessor(StateRepository& st_repo, Epoll& epoll)
 			"Failed to create raw AF_PACKET socket for CPU-interface");
 
 		/* Find interface */
-		int_idx = if_nametoindex(CPU_INTERFACE_NAME);
+		int_idx = if_nametoindex(st_repo.get_cpu_interface_name().c_str());
 		if (int_idx == 0)
 		{
 			throw system_error(errno, generic_category(),

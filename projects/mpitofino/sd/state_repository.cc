@@ -1,8 +1,75 @@
 #include <algorithm>
+#include <fstream>
+#include <sstream>
 #include <stdexcept>
 #include "state_repository.h"
 
 using namespace std;
+
+
+void StateRepository::read_config_file()
+{
+	/* Determine config file path and open the file */
+	vector<string> paths;
+	paths.push_back("./sd.conf");
+	paths.push_back("/etc/mpitofino/sd.conf");
+
+	ifstream f;
+	for (auto& p : paths)
+	{
+		f = ifstream(p);
+		if (f.is_open())
+			break;
+	}
+
+	if (!f)
+		throw runtime_error("Failed to open config file");
+
+	/* Parse file */
+	char buf[1024];
+	while (f.getline(buf, sizeof(buf)))
+	{
+		istringstream iss(buf);
+		vector<string> parts{
+			istream_iterator<string>{iss},
+			istream_iterator<string>{}};
+
+		if (parts.empty())
+			continue;
+
+		const auto& key = parts[0];
+
+		if (parts.size() != 2)
+			throw runtime_error("Expected argument after config key `" + key + "'");
+
+		const auto& value = parts[1];
+
+		if (key == "cpu_interface_name")
+		{
+			cpu_interface_name = value;
+		}
+		else if (key == "base_mac_addr")
+		{
+			base_mac_addr = MacAddr(value);
+		}
+		else if (key == "collectives_module_ip_addr")
+		{
+			collectives_module_ip_addr = IPv4Addr(value);
+		}
+		else if (key == "collectives_module_broadcast_addr")
+		{
+			collectives_module_broadcast_addr = IPv4Addr(value);
+		}
+		else if (key == "control_ip_addr")
+		{
+			control_ip_addr = IPv4Addr(value);
+		}
+		else
+		{
+			throw runtime_error("invalid config key `" + key + "'");
+		}
+	}
+}
 
 
 const CollectiveChannel* StateRepository::get_channel(uint64_t tag)
@@ -108,6 +175,12 @@ void StateRepository::unsubscribe_channels(void* handle)
 		throw invalid_argument("No such subscription");
 
 	subscribers_channels.erase(i);
+}
+
+
+string StateRepository::get_cpu_interface_name()
+{
+	return cpu_interface_name;
 }
 
 
