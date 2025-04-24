@@ -15,7 +15,8 @@ TimerFD::TimerFD(Epoll& epoll, cb_t cb)
 {
 	wfd.set_errno(timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC), "timerfd_create");
 
-	epoll.add_fd(wfd.get_fd(), EPOLLIN, bind_front(&TimerFD::on_fd, this));
+	epoll.add_fd(wfd.get_fd(), EPOLLIN, bind(&TimerFD::on_fd, this,
+				placeholders::_1, placeholders::_2));
 }
 
 TimerFD::~TimerFD()

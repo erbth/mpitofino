@@ -36,7 +36,8 @@ class NodeDaemon final
 protected:
 	Epoll epoll;
 	SignalFD sfd{{SIGINT, SIGTERM}, epoll,
-		         std::bind_front(&NodeDaemon::on_signal, this)};
+		         std::bind(&NodeDaemon::on_signal, this,
+						 std::placeholders::_1, std::placeholders::_2)};
 
 	/* Unix domain socket for local communication */
 	std::filesystem::path service_socket_path;

@@ -60,7 +60,8 @@ void Agent::initialize_client_interface()
 
 	/* Add to epoll instance */
 	epoll.add_fd(wfd.get_fd(), EPOLLIN,
-				 bind_front(&Agent::on_new_client, this));
+				 bind(&Agent::on_new_client, this,
+					 placeholders::_1, placeholders::_2));
 
 	client_listen_wfd = move(wfd);
 }
@@ -84,7 +85,8 @@ void Agent::on_new_client(int, uint32_t)
 	{
 		epoll.add_fd(clients.back().wfd.get_fd(),
 					 EPOLLIN | EPOLLHUP | EPOLLRDHUP,
-					 bind_front(&Agent::on_client_fd, this, &clients.back()));
+					 bind(&Agent::on_client_fd, this, &clients.back(),
+						 placeholders::_1, placeholders::_2));
 	}
 	catch (...)
 	{

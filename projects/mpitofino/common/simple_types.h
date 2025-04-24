@@ -56,6 +56,11 @@ struct MacAddr
 		return memcmp(addr, o.addr, sizeof(addr)) == 0;
 	}
 
+	inline bool operator!=(const MacAddr& o) const
+	{
+		return !(*this == o);
+	}
+
 	/* Useful for deriving MAC addresses */
 	inline MacAddr operator+(unsigned offset)
 	{
@@ -108,6 +113,11 @@ struct IPv4Addr
 	inline bool operator==(const IPv4Addr& o) const
 	{
 		return memcmp(addr, o.addr, 4) == 0;
+	}
+
+	inline bool operator!=(const IPv4Addr& o) const
+	{
+		return !(*this == o);
 	}
 
 	inline bool is_0000() const

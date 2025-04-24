@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
+#include <google/protobuf/stubs/common.h>
 #include "common/epoll.h"
 #include "common/signalfd.h"
 #include "state_repository.h"
@@ -21,6 +22,8 @@ using namespace std;
 
 void main_exc()
 {
+	GOOGLE_PROTOBUF_VERIFY_VERSION;
+
 	/* Initialize bfrt library */
 	//init_asic_driver_bfrt();
 

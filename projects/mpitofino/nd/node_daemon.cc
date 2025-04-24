@@ -143,7 +143,8 @@ NodeDaemon::NodeDaemon()
 
 	/* Add socket to epoll instance */
 	epoll.add_fd(service_wfd.get_fd(), EPOLLIN,
-				 bind_front(&NodeDaemon::on_client_conn, this));
+				 bind(&NodeDaemon::on_client_conn, this,
+					 placeholders::_1, placeholders::_2));
 
 	initialize_tdp();
 }
@@ -175,7 +176,8 @@ void NodeDaemon::on_client_conn(int fd, uint32_t events)
 	try
 	{
 		epoll.add_fd(c.get_fd(), EPOLLIN | EPOLLHUP | EPOLLRDHUP,
-					 bind_front(&NodeDaemon::on_client_fd, this, &c));
+					 bind(&NodeDaemon::on_client_fd, this, &c,
+						 placeholders::_1, placeholders::_2));
 	}
 	catch (...)
 	{
@@ -303,7 +305,8 @@ void NodeDaemon::initialize_tdp()
 
 	/* Add to epoll instance */
 	epoll.add_fd(tdp_wfd.get_fd(), EPOLLIN,
-				 bind_front(&NodeDaemon::on_tdp_fd, this));
+				 bind(&NodeDaemon::on_tdp_fd, this,
+					 placeholders::_1, placeholders::_2));
 }
 
 
@@ -364,7 +367,8 @@ void NodeDaemon::connect_to_switch()
 
 	/* Add socket to epoll instance */
 	epoll.add_fd(wfd.get_fd(), EPOLLIN | EPOLLHUP | EPOLLRDHUP,
-				 bind_front(&NodeDaemon::on_switch_fd, this));
+				 bind(&NodeDaemon::on_switch_fd, this,
+					 placeholders::_1, placeholders::_2));
 
 	switch_wfd = move(wfd);
 }

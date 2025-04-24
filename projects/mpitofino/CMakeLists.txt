@@ -7,7 +7,7 @@ set(MPITOFINO_VERSION_MINOR 0)
 set(MPITOFINO_VERSION_PATCH 1)
 
 
-set(CMAKE_CXX_FLAGS "-std=gnu++20 -Wall -O3 -gdwarf-2")
+set(CMAKE_CXX_FLAGS "-std=gnu++17 -Wall -O3 -gdwarf-2")
 
 
 # Build options
