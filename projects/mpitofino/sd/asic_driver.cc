@@ -447,7 +447,7 @@ void ASICDriver::on_st_repo_channels()
 		{
 			group_ports.push_back({
 					0x1000 + 0x200 * (rc->agg_unit / 8) + (pos-1),
-					part.switch_port * 4,
+					part.switch_port,
 					pos});
 
 			pos++;

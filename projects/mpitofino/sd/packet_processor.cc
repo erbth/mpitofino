@@ -316,15 +316,24 @@ void PacketProcessor::parse_packet_ipv4_icmp(
 
 void PacketProcessor::send_packet(const char* ptr, size_t size)
 {
+	/* Prepend pseudo header to make sure this is an Ethernet II frame
+	('length'/ethertype must be > 1536) */
+	char buf[14 + size];
+	memset(buf, 0, 12);
+	buf[12] = 0x08;
+	buf[13] = 0x00;
+
+	memcpy(buf + 14, ptr, size);
+
 	struct sockaddr_ll addr = {
 		.sll_family = AF_PACKET,
 		.sll_ifindex = int_idx
 	};
 
-	auto ret = sendto(com_fd.get_fd(), ptr, size,
+	auto ret = sendto(com_fd.get_fd(), buf, sizeof(buf),
 			0, (sockaddr*) &addr, sizeof(addr));
 
-	if (ret != (ssize_t) size)
+	if (ret != (ssize_t) sizeof(buf))
 	{
 		fprintf(stderr, "Failed to send packet to dataplane\n");
 		return;
@@ -341,66 +350,70 @@ void PacketProcessor::on_discovery_protocol_timer()
 	memset(buf, 0, sizeof(buf));
 
 	/* TODO: Query state_repo for active ports and use those */
-	for (int port_id = 0; port_id < 4; port_id++)
+	for (int i = 0; i < 4; i++)
 	{
-		char* ptr = buf;
+		for (int j = 0; j < 16; j++)
+		{
+			int port_id = i*128 + j*4;
+			char* ptr = buf;
 
-		/* Control plane offload header */
-		auto& cpo_hdr = *reinterpret_cast<CPOffloadHdr*>(ptr);
-		ptr += sizeof(cpo_hdr);
+			/* Control plane offload header */
+			auto& cpo_hdr = *reinterpret_cast<CPOffloadHdr*>(ptr);
+			ptr += sizeof(cpo_hdr);
 
-		cpo_hdr.port_id = htons(port_id * 4);
-
-
-		/* Ethernet header */
-		auto& eth_hdr = *reinterpret_cast<EthernetHdr*>(ptr);
-		ptr += sizeof(eth_hdr);
-
-		eth_hdr.src = st_repo.get_collectives_module_mac_addr();
-		eth_hdr.dst = MacAddr("ff:ff:ff:ff:ff:ff");
-		eth_hdr.type = htons((int) ether_type_t::IPv4);
+			cpo_hdr.port_id = htons(port_id);
 
 
-		/* IPv4 header */
-		auto& ipv4_hdr = *reinterpret_cast<IPv4Hdr*>(ptr);
-		ptr += sizeof(ipv4_hdr);
+			/* Ethernet header */
+			auto& eth_hdr = *reinterpret_cast<EthernetHdr*>(ptr);
+			ptr += sizeof(eth_hdr);
 
-		ipv4_hdr.version_ihl = 0x45;
-		ipv4_hdr.tos = 0;
-		ipv4_hdr.identification = 0x1234;
-		ipv4_hdr.flags_fragment_offset = 0;
-		ipv4_hdr.ttl = 16;
-		ipv4_hdr.protocol = (int) ipv4_protocol_t::UDP;
-		ipv4_hdr.src_addr = st_repo.get_collectives_module_ip_addr();
-		ipv4_hdr.dst_addr = st_repo.get_collectives_module_broadcast_addr();
+			eth_hdr.src = st_repo.get_collectives_module_mac_addr();
+			eth_hdr.dst = MacAddr("ff:ff:ff:ff:ff:ff");
+			eth_hdr.type = htons((int) ether_type_t::IPv4);
 
 
-		/* UDP header */
-		auto& udp_hdr = *reinterpret_cast<UDPHdr*>(ptr);
-		ptr += sizeof(udp_hdr);
+			/* IPv4 header */
+			auto& ipv4_hdr = *reinterpret_cast<IPv4Hdr*>(ptr);
+			ptr += sizeof(ipv4_hdr);
 
-		udp_hdr.src_port = htons(UDP_PORT_TDP);
-		udp_hdr.dst_port = htons(UDP_PORT_TDP);
-
-
-		/* TDP header */
-		auto& tdp_hdr = *reinterpret_cast<TDPHdr*>(ptr);
-		ptr += sizeof(tdp_hdr);
-
-		tdp_hdr.port = htons(port_id);
-		tdp_hdr.ctrl_ip = st_repo.get_control_ip_addr();
+			ipv4_hdr.version_ihl = 0x45;
+			ipv4_hdr.tos = 0;
+			ipv4_hdr.identification = 0x1234;
+			ipv4_hdr.flags_fragment_offset = 0;
+			ipv4_hdr.ttl = 16;
+			ipv4_hdr.protocol = (int) ipv4_protocol_t::UDP;
+			ipv4_hdr.src_addr = st_repo.get_collectives_module_ip_addr();
+			ipv4_hdr.dst_addr = st_repo.get_collectives_module_broadcast_addr();
 
 
-		/* Set UDP length */
-		udp_hdr.length = htons(ptr - (const char*) &udp_hdr);
-		
-		/* Set IPv4 total length */
-		ipv4_hdr.total_length = htons(ptr - buf -
-									  sizeof(eth_hdr) - sizeof(cpo_hdr));
+			/* UDP header */
+			auto& udp_hdr = *reinterpret_cast<UDPHdr*>(ptr);
+			ptr += sizeof(udp_hdr);
 
-		ipv4_hdr.header_checksum = internet_checksum(
-				(const char*) &ipv4_hdr, sizeof(ipv4_hdr));
+			udp_hdr.src_port = htons(UDP_PORT_TDP);
+			udp_hdr.dst_port = htons(UDP_PORT_TDP);
 
-		send_packet(buf, ptr - buf);
+
+			/* TDP header */
+			auto& tdp_hdr = *reinterpret_cast<TDPHdr*>(ptr);
+			ptr += sizeof(tdp_hdr);
+
+			tdp_hdr.port = htons(port_id);
+			tdp_hdr.ctrl_ip = st_repo.get_control_ip_addr();
+
+
+			/* Set UDP length */
+			udp_hdr.length = htons(ptr - (const char*) &udp_hdr);
+
+			/* Set IPv4 total length */
+			ipv4_hdr.total_length = htons(ptr - buf -
+										sizeof(eth_hdr) - sizeof(cpo_hdr));
+
+			ipv4_hdr.header_checksum = internet_checksum(
+					(const char*) &ipv4_hdr, sizeof(ipv4_hdr));
+
+			send_packet(buf, ptr - buf);
+		}
 	}
 }

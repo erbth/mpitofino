@@ -48,6 +48,9 @@ parser IngressParser(
 	}
 
 	state parse_cpoffload {
+		/* Strip pseudo header that designates this as Ethernet II frame */
+		pkt.advance(14*8);
+
 		pkt.extract(meta.cpoffload);
 
 		transition parse_ethernet;
