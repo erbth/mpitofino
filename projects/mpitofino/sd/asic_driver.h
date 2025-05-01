@@ -29,9 +29,9 @@ protected:
 	std::string program_conf_file;
 	bf_switchd_context_t switchd_ctx{};
 
-	bf_rt_target_t dev_tgt = {
+	const bf_rt_target_t dev_tgt = {
 		.dev_id = 0,
-		.pipe_id = 0xffff  // All pipes
+		.pipe_id = BF_DEV_PIPE_ALL  // All pipes
 	};
 
 	const bfrt::BfRtInfo* bfrt_info = nullptr;

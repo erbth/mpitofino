@@ -88,6 +88,9 @@ parser IngressParser(
 
 		transition select(ig_intr_md.ingress_port) {
 			68 : parse_aggregate_recirculated;  // pipe 0 recirculation port
+			196 : parse_aggregate_recirculated;  // pipe 1 recirculation port 1
+			324 : parse_aggregate_recirculated;  // pipe 2 recirculation port 1
+			452 : parse_aggregate_recirculated;  // pipe 3 recirculation port 1
 			default : accept;
 		}
 	}
@@ -163,6 +166,8 @@ control Ingress(
 
 
 	apply {
+		ig_tm_md.bypass_egress = 0;
+
 		if (meta.cpoffload.isValid() && meta.cpoffload.port_id != 65535)
 		{
 			/* Override all other actions and output the packet on the
@@ -186,6 +191,9 @@ control Ingress(
 		}
 
 		ig_tm_md.level1_exclusion_id = (bit<16>) ig_intr_md.ingress_port;
+
+		if (ig_tm_md.bypass_egress == 1)
+			meta.bridge_header.setInvalid();
 	}
 }
 

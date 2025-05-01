@@ -110,6 +110,11 @@ void ASICDriver::find_tables()
 	RES_TBL("Ingress.collectives.agg29.choose_action", collectives_choose_action[29]);
 	RES_TBL("Ingress.collectives.agg30.choose_action", collectives_choose_action[30]);
 	RES_TBL("Ingress.collectives.agg31.choose_action", collectives_choose_action[31]);
+
+	/* Set tables to asymmetric mode */
+	table_set_asym(*collectives_unit_selector, *session, dev_tgt, true);
+	table_set_asym(*collectives_check_complete, *session, dev_tgt, true);
+	table_set_asym(*collectives_output_address, *session, dev_tgt, true);
 }
 
 void ASICDriver::initial_setup()
@@ -418,25 +423,28 @@ void ASICDriver::on_st_repo_channels()
 	/* Get channels from st_repo */
 	auto repo_channels = st_repo.get_channels();
 
-	/* Get channels from ASIC */
-	/* TODO */
-
 	/* Add missing channels and client portals on ASIC */
 	for (auto& rc : repo_channels)
 	{
+		/* Check if all client channel requests arrived
+		   IMPROVE with a TM we could proceed here immediately per
+		   client as long as its switch port is already known by the
+		   TM (source UDP port / RoCE QP could be filled out later) */
+
+		bool all_nodes_known = true;
+		for (auto& [ipart,part] : rc->participants)
+		{
+			if (part.ip.is_0000())
+			{
+				all_nodes_known = false;
+				break;
+			}
+		}
+
+		if (!all_nodes_known)
+			continue;
+
 		uint16_t mcast_grp = 0x10 + rc->agg_unit / 8;
-
-		uint32_t full_bitmap_low = 0;
-		uint32_t full_bitmap_high = 0;
-
-		/* Construct full bitmap */
-		if (rc->participants.size() > 64)
-			throw runtime_error("Too participants in collectives channel.");
-
-		full_bitmap_low = (1ULL << min(rc->participants.size(), 32UL)) - 1;
-		if (rc->participants.size() > 32)
-			full_bitmap_high = (1ULL << (rc->participants.size() - 32)) - 1;
-
 
 		/* Create/update multicast group */
 		vector<bf_rt_id_t> port_ids;
@@ -482,49 +490,52 @@ void ASICDriver::on_st_repo_channels()
 
 
 		/* Construct worker bitmap */
-		uint32_t node_bitmap_low = 1;
-		uint32_t node_bitmap_high = 0;
-		
+		uint32_t node_bitmap_low[4] = {1, 1, 1, 1};
+		uint32_t node_bitmap_high[4] = {0, 0, 0, 0};
+
+		uint32_t full_bitmap_low[4] = {0, 0, 0, 0};
+		uint32_t full_bitmap_high[4] = {0, 0, 0, 0};
+
 		/* Insert participants */
 		pos = 1;
 		for (auto& [ipart,part] : rc->participants)
 		{
-			if (part.ip.is_0000())
-				continue;
+			/* Determine pipe */
+			int pipe = part.switch_port / 128;
+			auto pipe_tgt = dev_tgt;
+			pipe_tgt.pipe_id = pipe;
+
+			if (full_bitmap_high[pipe] >= 0x7fffffffUL)
+				throw runtime_error("Too many clients per pipe");
 			
 			/* Unit selector */
+			uint8_t ip_mask[4] = {0xff, 0xff, 0xff, 0xff};
+
 			check_bf_status(table_add_or_mod(
-				*collectives_unit_selector, *session, dev_tgt,
+				*collectives_unit_selector, *session, pipe_tgt,
 				*table_create_key<const uint8_t*, const uint8_t*, uint64_t, uint64_t>(
 					collectives_unit_selector,
-					{"hdr.ipv4.src_addr",
-					 reinterpret_cast<const uint8_t*>(&part.ip),
-					 sizeof(part.ip)},
+					table_field_desc_t<const uint8_t*>::create_ternary(
+						"hdr.ipv4.src_addr",
+						reinterpret_cast<const uint8_t*>(&part.ip), ip_mask,
+						sizeof(part.ip)),
 					{"hdr.ipv4.dst_addr",
-					 reinterpret_cast<const uint8_t*>(&rc->fabric_ip),
-					 sizeof(rc->fabric_ip)},
-					{"hdr.udp.src_port", part.port},
-					{"hdr.udp.dst_port", rc->fabric_port}),
-				*table_create_data_action<uint64_t, uint64_t, uint64_t, uint64_t>(
+					reinterpret_cast<const uint8_t*>(&rc->fabric_ip), sizeof(rc->fabric_ip)},
+					table_field_desc_t<uint64_t>::create_ternary(
+						"hdr.udp.src_port", part.port, 0xffff),
+					{"hdr.udp.dst_port", rc->fabric_port},
+					table_field_desc_t<uint64_t>::create_ternary("meta.ingress_port", 0, 0)),
+				*table_create_data_action<uint64_t, uint64_t, uint64_t>(
 					collectives_unit_selector, "Ingress.collectives.select_agg_unit",
-					{"mcast_grp", mcast_grp},
 					{"agg_unit", rc->agg_unit},
-					{"node_bitmap_low", node_bitmap_low},
-					{"node_bitmap_high", node_bitmap_high})),
+					{"node_bitmap_low", node_bitmap_low[pipe]},
+					{"node_bitmap_high", node_bitmap_high[pipe]})),
 			"Failed to update Collectives.unit_selector table");
-
-			/* Update worker bitmap */
-			if (node_bitmap_low == (1ULL << 31))
-				node_bitmap_high = 1;
-			else
-				node_bitmap_high <<= 1;
-
-			node_bitmap_low <<= 1;
 
 
 			/* Output address update */
 			check_bf_status(table_add_or_mod(
-				*collectives_output_address, *session, dev_tgt,
+				*collectives_output_address, *session, pipe_tgt,
 				*table_create_key<uint64_t, uint64_t>(
 					collectives_output_address,
 					{"meta.bridge_header.agg_unit", rc->agg_unit},
@@ -534,54 +545,160 @@ void ASICDriver::on_st_repo_channels()
 					collectives_output_address,
 					"Egress.collectives_distributor.output_address_set",
 					{"src_mac",
-					 reinterpret_cast<const uint8_t*>(&rc->fabric_mac),
-					 sizeof(rc->fabric_mac)},
+					reinterpret_cast<const uint8_t*>(&rc->fabric_mac),
+					sizeof(rc->fabric_mac)},
 					{"dst_mac",
-					 reinterpret_cast<const uint8_t*>(&part.mac),
-					 sizeof(part.mac)},
+					reinterpret_cast<const uint8_t*>(&part.mac),
+					sizeof(part.mac)},
 					{"src_ip",
-					 reinterpret_cast<const uint8_t*>(&rc->fabric_ip),
-					 sizeof(rc->fabric_ip)},
+					reinterpret_cast<const uint8_t*>(&rc->fabric_ip),
+					sizeof(rc->fabric_ip)},
 					{"dst_ip",
-					 reinterpret_cast<const uint8_t*>(&part.ip),
-					 sizeof(part.ip)},
+					reinterpret_cast<const uint8_t*>(&part.ip),
+					sizeof(part.ip)},
 					{"src_port", rc->fabric_port},
 					{"dst_port", part.port})),
 			"Failed to update CollectivesDistributor.output_address table");
 
+
+			/* Update worker bitmap */
+			full_bitmap_low[pipe] |= node_bitmap_low[pipe];
+			full_bitmap_high[pipe] |= node_bitmap_high[pipe];
+			
+			if (node_bitmap_low[pipe] == (1ULL << 31))
+				node_bitmap_high[pipe] = 1;
+			else
+				node_bitmap_high[pipe] <<= 1;
+
+			node_bitmap_low[pipe] <<= 1;
+
 			pos++;
 		}
 
-		/* Insert or update check_complete/full map */
-		check_bf_status(table_add_or_mod(
-			*collectives_check_complete, *session, dev_tgt,
-			*table_create_key<uint64_t, uint64_t, uint64_t, bool>(
-				collectives_check_complete,
-				{"meta.agg_unit", rc->agg_unit},
-				table_field_desc_t<uint64_t>::create_ternary(
-					"meta.node_bitmap.low", full_bitmap_low, 0xffffffff),
-				table_field_desc_t<uint64_t>::create_ternary(
-					"meta.node_bitmap.high", full_bitmap_high, 0xffffffff),
-				{"meta.agg_is_clear", false}),
-			*table_create_data_action<>(
-				collectives_check_complete,
-				"Ingress.collectives.check_complete_true")),
-		"Failed to update Collectives.check_complete table");
 
-		check_bf_status(table_add_or_mod(
-			*collectives_check_complete, *session, dev_tgt,
-			*table_create_key<uint64_t, uint64_t, uint64_t, bool>(
-				collectives_check_complete,
-				{"meta.agg_unit", rc->agg_unit},
-				table_field_desc_t<uint64_t>::create_ternary(
-					"meta.node_bitmap.low", 0, 0),
-				table_field_desc_t<uint64_t>::create_ternary(
-					"meta.node_bitmap.high", 0, 0),
-				{"meta.agg_is_clear", true}),
-			*table_create_data_action<>(
-				collectives_check_complete,
-				"Ingress.collectives.check_complete_clear")),
-		"Failed to update Collectives.check_complete table");
+		/* If required, add inter-pipe downstream ports */
+		for (int pipe = 1; pipe < 4; pipe++)
+		{
+			auto pipe_tgt = dev_tgt;
+			pipe_tgt.pipe_id = pipe;
+
+			/* Does this pipe have any clients? */
+			if (full_bitmap_low[pipe] == 0)
+				continue;
+
+			/* Find the next pipe to the left with clients and chain to it. */
+			int prev_pipe = -1;
+			for (int j = pipe - 1; j >= 0; j--)
+			{
+				if (full_bitmap_low[j])
+				{
+					prev_pipe = j;
+					break;
+				}
+			}
+
+			if (prev_pipe < 0)
+				continue;
+
+			full_bitmap_low[pipe] |= node_bitmap_low[pipe];
+			full_bitmap_high[pipe] |= node_bitmap_high[pipe];
+
+			/* Accept packets from other pipe and recirculated packets */
+			uint8_t zero_ip[4] = {0, 0, 0, 0};
+			check_bf_status(table_add_or_mod(
+				*collectives_unit_selector, *session, pipe_tgt,
+				*table_create_key<const uint8_t*, const uint8_t*, uint64_t, uint64_t>(
+					collectives_unit_selector,
+					table_field_desc_t<const uint8_t*>::create_ternary(
+						"hdr.ipv4.src_addr", zero_ip, zero_ip, sizeof(zero_ip)),
+					{"hdr.ipv4.dst_addr",
+					 reinterpret_cast<const uint8_t*>(&rc->fabric_ip), sizeof(rc->fabric_ip)},
+					table_field_desc_t<uint64_t>::create_ternary(
+						"hdr.udp.src_port", 0, 0),
+					{"hdr.udp.dst_port", rc->fabric_port},
+					table_field_desc_t<uint64_t>::create_ternary(
+						"meta.ingress_port", pipe*128 + 64, 0x1fb)),
+				*table_create_data_action<uint64_t, uint64_t, uint64_t>(
+					collectives_unit_selector, "Ingress.collectives.select_agg_unit",
+					{"agg_unit", rc->agg_unit},
+					{"node_bitmap_low", node_bitmap_low[pipe]},
+					{"node_bitmap_high", node_bitmap_high[pipe]})),
+			"Failed to update Collectives.unit_selector table");
+		}
+
+
+		/* Insert or update check_complete/full map
+		   Note that this requires different values on the four pipes
+		 to accumulate the per-pipe results. */
+		for (int pipe = 0; pipe < 4; pipe++)
+		{
+			auto pipe_tgt = dev_tgt;
+			pipe_tgt.pipe_id = pipe;
+
+			if (full_bitmap_low[pipe] == 0)
+				continue;
+
+			check_bf_status(table_add_or_mod(
+				*collectives_check_complete, *session, pipe_tgt,
+				*table_create_key<uint64_t, uint64_t, uint64_t, bool>(
+					collectives_check_complete,
+					{"meta.agg_unit", rc->agg_unit},
+					table_field_desc_t<uint64_t>::create_ternary(
+						"meta.node_bitmap.low", full_bitmap_low[pipe], 0xffffffff),
+					table_field_desc_t<uint64_t>::create_ternary(
+						"meta.node_bitmap.high", full_bitmap_high[pipe], 0xffffffff),
+					{"meta.agg_is_clear", false}),
+				*table_create_data_action<uint64_t>(
+					collectives_check_complete,
+					"Ingress.collectives.check_complete_true",
+					{"recirc_port", pipe*128U + 68})),
+			"Failed to update Collectives.check_complete table");
+
+
+			std::unique_ptr<BfRtTableData> action;
+
+			/* Do pipes 'to the right' of this pipe have more clients?
+			If yes, which is the next one? */
+			int next_pipe = -1;
+
+			for (int j = pipe + 1; j < 4; j++)
+			{
+				if (full_bitmap_low[j])
+				{
+					next_pipe = j;
+					break;
+				}
+			}
+
+			if (next_pipe >= 0)
+			{
+				action = table_create_data_action<uint64_t>(
+						collectives_check_complete,
+						"Ingress.collectives.check_complete_next_pipe",
+						{"port", next_pipe*128U + 64});
+			}
+			else
+			{
+				action = table_create_data_action<uint64_t>(
+						collectives_check_complete,
+						"Ingress.collectives.check_complete_distribute",
+						{"mcast_grp", mcast_grp});
+			}
+
+			check_bf_status(table_add_or_mod(
+				*collectives_check_complete, *session, pipe_tgt,
+				*table_create_key<uint64_t, uint64_t, uint64_t, bool>(
+					collectives_check_complete,
+					{"meta.agg_unit", rc->agg_unit},
+					table_field_desc_t<uint64_t>::create_ternary(
+						"meta.node_bitmap.low", 0, 0),
+					table_field_desc_t<uint64_t>::create_ternary(
+						"meta.node_bitmap.high", 0, 0),
+					{"meta.agg_is_clear", true}),
+				*action),
+			"Failed to update Collectives.check_complete table");
+		}
+
 
 		/* Insert or update choose_action */
 		for (int i = 0; i < 32; i++)

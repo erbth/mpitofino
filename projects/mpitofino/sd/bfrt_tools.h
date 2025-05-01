@@ -179,6 +179,36 @@ std::unique_ptr<BfRtTableData> table_create_data_action(
 	return data;
 }
 
+
+inline void table_set_asym(
+	const BfRtTable& table,
+	const bfrt::BfRtSession& session,
+	const bf_rt_target_t& dev_tgt,
+	bool is_async)
+{
+	std::unique_ptr<BfRtTableAttributes> ta;
+	check_bf_status(
+		table.attributeAllocate(TableAttributesType::ENTRY_SCOPE, &ta),
+		"table.attributeAllocate");
+
+	std::unique_ptr<BfRtTableEntryScopeArguments> scope_args;
+	check_bf_status(
+		ta->entryScopeArgumentsAllocate(&scope_args),
+		"ta->entryScopeArgumentsAllocate");
+
+	check_bf_status(
+		ta->entryScopeParamsSet(
+			is_async ? TableEntryScope::ENTRY_SCOPE_SINGLE_PIPELINE
+				: TableEntryScope::ENTRY_SCOPE_ALL_PIPELINES,
+			*scope_args),
+		"entryScopeParamsSet");
+
+	check_bf_status(
+		table.tableAttributesSet(session, dev_tgt, *ta),
+		"tableAttributesSet");
+}
+
+
 /* Helper for older SDE versions */
 inline bf_status_t table_add_or_mod(
 		const BfRtTable& table,

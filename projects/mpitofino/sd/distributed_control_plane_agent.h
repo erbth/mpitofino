@@ -2,6 +2,7 @@
 #define __DISTRIBUTED_CONTROL_PLANE_AGENT_H
 
 #include <list>
+#include <map>
 #include "common/utils.h"
 #include "common/epoll.h"
 #include "ctrl_sd.pb.h"
@@ -38,6 +39,12 @@ protected:
 	void on_new_client(int, uint32_t);
 	void on_client_fd(Client* client, int fd, uint32_t events);
 	void on_client_get_channel(Client* client, const proto::ctrl_sd::GetChannel& msg);
+
+	std::map<
+		uint64_t,
+		std::map<Client*, proto::ctrl_sd::GetChannelResponse>>
+	pending_get_channel_responses;
+
 
 public:
 	Agent(StateRepository& st_repo, Epoll& epoll);

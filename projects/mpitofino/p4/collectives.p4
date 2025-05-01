@@ -143,17 +143,26 @@ control Collectives(
 	};
 
 
-	action check_complete_true() {
+	action check_complete_true(PortId_t recirc_port) {
 		ig_dprsr_md.drop_ctl = 0;
-		invalidate(ig_tm_md.mcast_grp_a);
 
-		/* Recirculate (NOTE: Would need to be changed dynamically when
-		 * splitting the switch into virtual switches according to pipes) */
-		ig_tm_md.ucast_egress_port = 68;
+		/* Recirculate */
+		ig_tm_md.ucast_egress_port = recirc_port;
 	}
 
-	action check_complete_clear() {
+	action check_complete_next_pipe(PortId_t port) {
 		ig_dprsr_md.drop_ctl = 0;
+
+		/* Send to other pipe */
+		ig_tm_md.ucast_egress_port = port;
+
+		/* Skip egress processing */
+		ig_tm_md.bypass_egress = 1;
+	}
+
+	action check_complete_distribute(bit<16> mcast_grp) {
+		ig_dprsr_md.drop_ctl = 0;
+		ig_tm_md.mcast_grp_a = mcast_grp;
 	}
 
 	table check_complete {
@@ -166,7 +175,8 @@ control Collectives(
 
 		actions = {
 			check_complete_true;
-			check_complete_clear;
+			check_complete_next_pipe;
+			check_complete_distribute;
 			NoAction;
 		}
 
@@ -186,11 +196,10 @@ control Collectives(
 		ig_dprsr_md.drop_ctl = 1;
 	}
 
-	action select_agg_unit(bit<16> mcast_grp, bit<16> agg_unit,
+	action select_agg_unit(bit<16> agg_unit,
 			bit<32> node_bitmap_low, bit<32> node_bitmap_high)
 	{
 		// Setup aggregation configuration
-		ig_tm_md.mcast_grp_a = mcast_grp;
 		ig_dprsr_md.drop_ctl = 1;
 		meta.agg_unit = agg_unit;
 		meta.bridge_header.agg_unit = agg_unit;
@@ -202,10 +211,11 @@ control Collectives(
 
 	table unit_selector {
 		key = {
-			hdr.ipv4.src_addr : exact;
+			hdr.ipv4.src_addr : ternary;
 			hdr.ipv4.dst_addr : exact;
-			hdr.udp.src_port : exact;
+			hdr.udp.src_port : ternary;
 			hdr.udp.dst_port : exact;
+			meta.ingress_port : ternary;
 		}
 
 		actions = {

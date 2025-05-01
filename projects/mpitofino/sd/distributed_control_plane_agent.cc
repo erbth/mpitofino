@@ -172,11 +172,20 @@ void Agent::on_client_get_channel(Client* client, const proto::ctrl_sd::GetChann
 
 		st_repo.add_channel(c);
 		ch = st_repo.get_channel(c.tag);
+
+
+		/* Clear any pending responses */
+		auto pi = pending_get_channel_responses.find(ch->tag);
+		if (pi != pending_get_channel_responses.end())
+			pending_get_channel_responses.erase(pi);
 	}
 
 	/* Update client parameters */
 	auto client_ip = msg.client_ip();
 	auto client_mac = msg.client_mac();
+
+	if (msg.switch_port() < 0 || msg.switch_port() >= 128*4)
+		throw runtime_error("Switch port received from client out of range");
 
 	st_repo.update_channel_participant(
 		msg.tag(), msg.client_id(),
@@ -191,7 +200,21 @@ void Agent::on_client_get_channel(Client* client, const proto::ctrl_sd::GetChann
 	resp.set_fabric_ip(*reinterpret_cast<const uint32_t*>(&ch->fabric_ip));
 	resp.set_fabric_port(ch->fabric_port);
 
-	send_protobuf_message_simple_stream(client->wfd.get_fd(), resp);
+	/* Hold reply until all clients are known s.t. the ASIC has been
+	fully configured to handle all incoming datagrams correctly
+	(i.e. all full-bitmaps are set correctly, which requires knowledge
+	about the nodes' switch ports. IMPROVE this could be done
+	immediately with the TM once implemented.) */
+	auto [pi,p_inserted] = pending_get_channel_responses.try_emplace(ch->tag);
+	auto& pm = pi->second;
+	pm.insert({client, resp});
+
+	/* Check if all clients have responded and if yes, forward replies */
+	if (pm.size() == ch->participants.size())
+	{
+		for (auto& [pc, presp] : pm)
+			send_protobuf_message_simple_stream(pc->wfd.get_fd(), presp);
+	}
 }
 
 
