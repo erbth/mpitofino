@@ -1,0 +1,13 @@
+{
+    "PortToIf" : [
+        { "device_port" :  64, "if" : "cpu_eth_0" },
+
+        { "device_port" :  0, "if" : "enp0s4"  },
+        { "device_port" :  4, "if" : "enp0s5"  },
+        { "device_port" :  128, "if" : "enp0s6"  },
+        { "device_port" :  256, "if" : "enp0s7"  },
+
+				{ "device_port" : 440, "if" : "lb60" },
+				{ "device_port" : 444, "if" : "lb64" }
+    ]
+}

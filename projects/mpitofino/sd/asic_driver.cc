@@ -126,7 +126,7 @@ void ASICDriver::initial_setup()
 	vector<bf_rt_id_t> port_ids;
 	for (int i = 0; i < 4; i++)
 	{
-		for (int j = 0; j < 16; j++)
+		for (int j = 0; j < (i == 3 ? 14 : 16); j++)
 			port_ids.push_back(i*128 + j*4);
 	}
 
@@ -505,7 +505,7 @@ void ASICDriver::on_st_repo_channels()
 			auto pipe_tgt = dev_tgt;
 			pipe_tgt.pipe_id = pipe;
 
-			if (full_bitmap_high[pipe] >= 0x7fffffffUL)
+			if (full_bitmap_high[pipe] >= (pipe == 3 ? 0x1fffffffUL : 0xffffffffUL))
 				throw runtime_error("Too many clients per pipe");
 			
 			/* Unit selector */
@@ -577,33 +577,27 @@ void ASICDriver::on_st_repo_channels()
 
 
 		/* If required, add inter-pipe downstream ports */
-		for (int pipe = 1; pipe < 4; pipe++)
+		int cnt_pipes_with_nodes = 0;
+		for (int pipe = 0; pipe < 4; pipe++)
 		{
-			auto pipe_tgt = dev_tgt;
-			pipe_tgt.pipe_id = pipe;
+			if (full_bitmap_low[pipe])
+				cnt_pipes_with_nodes++;
+		}
 
+		bool have_connected_pipes = cnt_pipes_with_nodes > 1;
+
+		for (int pipe = 0; cnt_pipes_with_nodes && pipe < 3; pipe++)
+		{
 			/* Does this pipe have any clients? */
 			if (full_bitmap_low[pipe] == 0)
 				continue;
 
-			/* Find the next pipe to the left with clients and chain to it. */
-			int prev_pipe = -1;
-			for (int j = pipe - 1; j >= 0; j--)
-			{
-				if (full_bitmap_low[j])
-				{
-					prev_pipe = j;
-					break;
-				}
-			}
 
-			if (prev_pipe < 0)
-				continue;
+			auto pipe_tgt = dev_tgt;
+			pipe_tgt.pipe_id = 3;
 
-			full_bitmap_low[pipe] |= node_bitmap_low[pipe];
-			full_bitmap_high[pipe] |= node_bitmap_high[pipe];
 
-			/* Accept packets from other pipe and recirculated packets */
+			/* Accept packets from other pipe */
 			uint8_t zero_ip[4] = {0, 0, 0, 0};
 			check_bf_status(table_add_or_mod(
 				*collectives_unit_selector, *session, pipe_tgt,
@@ -617,19 +611,62 @@ void ASICDriver::on_st_repo_channels()
 						"hdr.udp.src_port", 0, 0),
 					{"hdr.udp.dst_port", rc->fabric_port},
 					table_field_desc_t<uint64_t>::create_ternary(
-						"meta.ingress_port", pipe*128 + 64, 0x1fb)),
+						"meta.ingress_port", 3*128 + 56 + pipe*4, 0x1ff)),
 				*table_create_data_action<uint64_t, uint64_t, uint64_t>(
 					collectives_unit_selector, "Ingress.collectives.select_agg_unit",
 					{"agg_unit", rc->agg_unit},
-					{"node_bitmap_low", node_bitmap_low[pipe]},
-					{"node_bitmap_high", node_bitmap_high[pipe]})),
+					{"node_bitmap_low", node_bitmap_low[3]},
+					{"node_bitmap_high", node_bitmap_high[3]})),
+			"Failed to update Collectives.unit_selector table");
+
+
+			/* Update worker bitmap */
+			full_bitmap_low[3] |= node_bitmap_low[3];
+			full_bitmap_high[3] |= node_bitmap_high[3];
+
+			if (node_bitmap_low[3] == (1ULL << 31))
+				node_bitmap_high[3] = 1;
+			else
+				node_bitmap_high[3] <<= 1;
+
+			node_bitmap_low[3] <<= 1;
+		}
+
+		if (have_connected_pipes)
+		{
+			/* Accept recirculated packets from downstream pipes on
+			pipe 3 (on node-ports this works automatically due to
+			matching source addresses, but here the 'source address'
+			is a port, which changes for recirculation) */
+			auto pipe_tgt = dev_tgt;
+			pipe_tgt.pipe_id = 3;
+
+			uint8_t zero_ip[4] = {0, 0, 0, 0};
+			check_bf_status(table_add_or_mod(
+				*collectives_unit_selector, *session, pipe_tgt,
+				*table_create_key<const uint8_t*, const uint8_t*, uint64_t, uint64_t>(
+					collectives_unit_selector,
+					table_field_desc_t<const uint8_t*>::create_ternary(
+						"hdr.ipv4.src_addr", zero_ip, zero_ip, sizeof(zero_ip)),
+					{"hdr.ipv4.dst_addr",
+					 reinterpret_cast<const uint8_t*>(&rc->fabric_ip), sizeof(rc->fabric_ip)},
+					table_field_desc_t<uint64_t>::create_ternary(
+						"hdr.udp.src_port", 0, 0),
+					{"hdr.udp.dst_port", rc->fabric_port},
+					table_field_desc_t<uint64_t>::create_ternary(
+						"meta.ingress_port", 3*128 + 68, 0x1ff)),
+				*table_create_data_action<uint64_t, uint64_t, uint64_t>(
+					collectives_unit_selector, "Ingress.collectives.select_agg_unit",
+					{"agg_unit", rc->agg_unit},
+					{"node_bitmap_low", node_bitmap_low[3]},
+					{"node_bitmap_high", node_bitmap_high[3]})),
 			"Failed to update Collectives.unit_selector table");
 		}
 
 
-		/* Insert or update check_complete/full map
-		   Note that this requires different values on the four pipes
-		 to accumulate the per-pipe results. */
+		/* Insert or update check_complete/full map Note that this
+		   requires different values on the four pipes to accumulate
+		   the per-pipe results. */
 		for (int pipe = 0; pipe < 4; pipe++)
 		{
 			auto pipe_tgt = dev_tgt;
@@ -657,25 +694,14 @@ void ASICDriver::on_st_repo_channels()
 
 			std::unique_ptr<BfRtTableData> action;
 
-			/* Do pipes 'to the right' of this pipe have more clients?
-			If yes, which is the next one? */
-			int next_pipe = -1;
-
-			for (int j = pipe + 1; j < 4; j++)
-			{
-				if (full_bitmap_low[j])
-				{
-					next_pipe = j;
-					break;
-				}
-			}
-
-			if (next_pipe >= 0)
+			/* If more than one pipes have data, chain up to the
+			'rightmost' pipe */
+			if (have_connected_pipes && pipe != 3)
 			{
 				action = table_create_data_action<uint64_t>(
 						collectives_check_complete,
 						"Ingress.collectives.check_complete_next_pipe",
-						{"port", next_pipe*128U + 64});
+						{"port", 3*128U + 56 + pipe*4});
 			}
 			else
 			{

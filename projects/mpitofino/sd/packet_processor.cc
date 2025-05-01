@@ -352,7 +352,7 @@ void PacketProcessor::on_discovery_protocol_timer()
 	/* TODO: Query state_repo for active ports and use those */
 	for (int i = 0; i < 4; i++)
 	{
-		for (int j = 0; j < 16; j++)
+		for (int j = 0; j < (i == 3 ? 14 : 16); j++)
 		{
 			int port_id = i*128 + j*4;
 			char* ptr = buf;
