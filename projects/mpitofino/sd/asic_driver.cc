@@ -245,43 +245,31 @@ void ASICDriver::initial_setup()
 			st_repo.get_collectives_module_mac_addr(),
 			"Ingress.collective");
 
-	/* Ignore all packets from the CPU port for learning */
+	/* Ignore all packets coming from the CPU, and
+	recirculation/inter-pipe ports for mac address learning. */
 	uint8_t value[6] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 	uint8_t mask[6] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
-	check_bf_status(table_add_or_mod(*switching_table_src,
-				*session, dev_tgt,
-				*table_create_key<const uint8_t*, uint64_t>(
-					switching_table_src,
-					table_field_desc_t<const uint8_t*>::create_ternary(
-						"hdr.ethernet.src_addr", value, mask, sizeof(value)),
-					table_field_desc_t<uint64_t>::create_ternary(
-						"meta.ingress_port", 64, 0x1ff)
-				),
-				*table_create_data_action<>(
-					switching_table_src,
-					"NoAction"
-				)
-			),
-			"Failed to add entry to switching_table_src");
+	vector<bf_rt_id_t> to_ignore{64, 68, 192, 196, 320, 324, 440, 444, 448, 452};
 
-	/* Ignore all packets coming from the recirculation port for mac address
-	 * learning. */
-	check_bf_status(table_add_or_mod(*switching_table_src,
-				*session, dev_tgt,
-				*table_create_key<const uint8_t*, uint64_t>(
-					switching_table_src,
-					table_field_desc_t<const uint8_t*>::create_ternary(
-						"hdr.ethernet.src_addr", value, mask, sizeof(value)),
-					table_field_desc_t<uint64_t>::create_ternary(
-						"meta.ingress_port", 68, 0x1ff)
+	for (auto p : to_ignore)
+	{
+		check_bf_status(table_add_or_mod(*switching_table_src,
+					*session, dev_tgt,
+					*table_create_key<const uint8_t*, uint64_t>(
+						switching_table_src,
+						table_field_desc_t<const uint8_t*>::create_ternary(
+							"hdr.ethernet.src_addr", value, mask, sizeof(value)),
+						table_field_desc_t<uint64_t>::create_ternary(
+							"meta.ingress_port", p, 0x1ff)
+					),
+					*table_create_data_action<>(
+						switching_table_src,
+						"NoAction"
+					)
 				),
-				*table_create_data_action<>(
-					switching_table_src,
-					"NoAction"
-				)
-			),
-			"Failed to add entry to switching_table_src");
+				"Failed to add entry to switching_table_src");
+	}
 }
 
 
@@ -586,7 +574,7 @@ void ASICDriver::on_st_repo_channels()
 
 		bool have_connected_pipes = cnt_pipes_with_nodes > 1;
 
-		for (int pipe = 0; cnt_pipes_with_nodes && pipe < 3; pipe++)
+		for (int pipe = 0; have_connected_pipes && pipe < 3; pipe++)
 		{
 			/* Does this pipe have any clients? */
 			if (full_bitmap_low[pipe] == 0)

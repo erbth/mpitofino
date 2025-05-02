@@ -214,6 +214,8 @@ void Agent::on_client_get_channel(Client* client, const proto::ctrl_sd::GetChann
 	{
 		for (auto& [pc, presp] : pm)
 			send_protobuf_message_simple_stream(pc->wfd.get_fd(), presp);
+
+		pending_get_channel_responses.erase(pi);
 	}
 }
 
