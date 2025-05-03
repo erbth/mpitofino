@@ -5,6 +5,7 @@
 #include <functional>
 #include <string>
 #include <list>
+#include <set>
 #include "common/epoll.h"
 #include "common/signalfd.h"
 #include "common/utils.h"
@@ -23,11 +24,12 @@ struct Client final
 	Client(WrappedFD&& wfd);
 	Client(Client&&) = delete;
 
+	std::set<uint64_t> channels;
+
 	inline int get_fd()
 	{
 		return wfd.get_fd();
 	}
-			
 };
 
 

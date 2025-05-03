@@ -222,6 +222,34 @@ void NodeDaemon::on_client_fd(Client* c, int fd, uint32_t events)
 		if (i != clients.end())
 		{
 			epoll.remove_fd(c->get_fd());
+
+			/* Check if the channels used by the client are still in
+			   use by other clients, otherwise unref them at the
+			   switch. */
+			for (auto ch_tag : c->channels)
+			{
+				size_t users = 0;
+
+				for (auto& c2 : clients)
+				{
+					if (&c2 == c)
+						continue;
+
+					if (c2.channels.find(ch_tag) != c2.channels.end())
+						users++;
+				}
+
+				if (users == 0)
+				{
+					proto::ctrl_sd::NdRequest switch_req;
+					auto uc = switch_req.mutable_unref_channel();
+
+					uc->set_tag(ch_tag);
+
+					send_protobuf_message_simple_stream(switch_wfd.get_fd(), switch_req);
+				}
+			}
+
 			clients.erase(i);
 		}
 	}
@@ -233,6 +261,9 @@ void NodeDaemon::on_client_get_channel(Client* c, const GetChannel& msg)
 	 * delay the request until the switch is known) */
 	if (nearest_switch_ip.is_0000())
 		return;
+
+
+	c->channels.insert(msg.tag());
 	
 
 	/* Allocate local port */
