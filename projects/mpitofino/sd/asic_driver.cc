@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <string>
 #include <filesystem>
+#include <set>
 #include "common/utils.h"
 #include "asic_driver.h"
 #include "bfrt_tools.h"
@@ -411,6 +412,9 @@ void ASICDriver::on_st_repo_channels()
 	/* Get channels from st_repo */
 	auto repo_channels = st_repo.get_channels();
 
+	set<uint16_t> agg_units_in_use;
+	set<uint16_t> mcast_groups_in_use;
+
 	/* Add missing channels and client portals on ASIC */
 	for (auto& rc : repo_channels)
 	{
@@ -432,7 +436,11 @@ void ASICDriver::on_st_repo_channels()
 		if (!all_nodes_known)
 			continue;
 
+		agg_units_in_use.insert(rc->agg_unit);
+
 		uint16_t mcast_grp = 0x10 + rc->agg_unit / 8;
+
+		mcast_groups_in_use.insert(mcast_grp);
 
 		/* Create/update multicast group */
 		vector<bf_rt_id_t> port_ids;
@@ -483,7 +491,7 @@ void ASICDriver::on_st_repo_channels()
 
 		uint32_t full_bitmap_low[4] = {0, 0, 0, 0};
 		uint32_t full_bitmap_high[4] = {0, 0, 0, 0};
-
+		
 		/* Insert participants */
 		pos = 1;
 		for (auto& [ipart,part] : rc->participants)
@@ -746,6 +754,275 @@ void ASICDriver::on_st_repo_channels()
 		}
 	}
 
+
 	/* Delete excess channels from ASIC */
-	/* TODO */
+	set<uint16_t> agg_units_to_clear;
+
+	for (int pipe = 0; pipe < 4; pipe++)
+	{
+		auto pipe_tgt = dev_tgt;
+		pipe_tgt.pipe_id = pipe;
+
+		/* unit_selector */
+		bf_rt_id_t act_id_select_agg_unit{};
+		check_bf_status(
+				collectives_unit_selector->actionIdGet(
+					"Ingress.collectives.select_agg_unit",
+					&act_id_select_agg_unit),
+				"actionIdGet");
+
+		bf_rt_id_t field_id_select_agg_unit{};
+		check_bf_status(
+				collectives_unit_selector->dataFieldIdGet(
+					"agg_unit", act_id_select_agg_unit,
+					&field_id_select_agg_unit),
+				"dataFieldIdGet");
+
+		
+		{
+			table_iterator i(*collectives_unit_selector, *session, pipe_tgt);
+			for (; i; ++i)
+			{
+				auto d = (*i).second;
+				bf_rt_id_t act_id{};
+				check_bf_status(d->actionIdGet(&act_id), "d->actionGetId");
+				if (act_id != act_id_select_agg_unit)
+					continue;
+
+				uint64_t agg_unit{};
+				check_bf_status(d->getValue(field_id_select_agg_unit, &agg_unit),
+								"d->getValue");
+
+				if (agg_units_in_use.find(agg_unit) == agg_units_in_use.end())
+				{
+					agg_units_to_clear.insert(agg_unit);
+
+					check_bf_status(collectives_unit_selector->tableEntryDel(
+										*session, pipe_tgt, *((*i).first)),
+									"tableEntryDel");
+				}
+			}
+		}
+
+		/* check_complete */
+		bf_rt_id_t field_id_check_complete{};
+		check_bf_status(
+				collectives_check_complete->keyFieldIdGet(
+					"meta.agg_unit", &field_id_check_complete),
+				"keyFieldIdGet");
+
+		
+		{
+			table_iterator i(*collectives_check_complete, *session, pipe_tgt);
+			for (; i; ++i)
+			{
+				auto k = (*i).first;
+
+				uint64_t agg_unit{};
+				check_bf_status(k->getValue(field_id_check_complete, &agg_unit),
+								"k->getValue");
+
+				if (agg_units_in_use.find(agg_unit) == agg_units_in_use.end())
+				{
+					check_bf_status(collectives_check_complete->tableEntryDel(
+										*session, pipe_tgt, *k),
+									"tableEntryDel");
+				}
+			}
+		}
+
+		/* output_address */
+		bf_rt_id_t field_id_output_address{};
+		check_bf_status(
+				collectives_output_address->keyFieldIdGet(
+					"meta.bridge_header.agg_unit", &field_id_output_address),
+				"keyFieldIdGet");
+
+		
+		{
+			table_iterator i(*collectives_output_address, *session, pipe_tgt);
+			for (; i; ++i)
+			{
+				auto k = (*i).first;
+
+				uint64_t agg_unit{};
+				check_bf_status(k->getValue(field_id_output_address, &agg_unit),
+								"k->getValue");
+
+				if (agg_units_in_use.find(agg_unit) == agg_units_in_use.end())
+				{
+					check_bf_status(collectives_output_address->tableEntryDel(
+										*session, pipe_tgt, *k),
+									"tableEntryDel");
+				}
+			}
+		}
+	}
+
+	/* choose_action */
+	for (int j = 0; j < 32; j++)
+	{
+		bf_rt_id_t field_id_choose_action{};
+		check_bf_status(
+				collectives_choose_action[j]->keyFieldIdGet(
+					"meta.agg_unit", &field_id_choose_action),
+				"keyFieldIdGet");
+
+
+		{
+			table_iterator i(*collectives_choose_action[j], *session, dev_tgt);
+			for (; i; ++i)
+			{
+				auto k = (*i).first;
+
+				uint64_t agg_unit{};
+				check_bf_status(k->getValue(field_id_choose_action, &agg_unit),
+								"k->getValue");
+
+				if (agg_units_in_use.find(agg_unit) == agg_units_in_use.end())
+				{
+					check_bf_status(collectives_choose_action[j]->tableEntryDel(
+										*session, dev_tgt, *k),
+									"tableEntryDel");
+				}
+			}
+		}
+	}
+
+	/* mcast group */
+	{
+		set<bf_rt_id_t> mcast_nodes_in_use;
+		
+		/* Groups */
+		bf_rt_id_t field_id_mgid{};
+		check_bf_status(
+				pre_mgid->keyFieldIdGet(
+					"$MGID", &field_id_mgid),
+				"keyFieldIdGet");
+
+		bf_rt_id_t field_id_node_id{};
+		check_bf_status(
+				pre_mgid->dataFieldIdGet(
+					"$MULTICAST_NODE_ID", &field_id_node_id),
+				"dataFieldIdGet");
+
+		{
+			table_iterator i(*pre_mgid, *session, dev_tgt);
+			for (; i; ++i)
+			{
+				auto k = (*i).first;
+				auto d = (*i).second;
+
+				uint64_t mgid{};
+				check_bf_status(k->getValue(field_id_mgid, &mgid),
+								"k->getValue");
+
+				if (mgid >= 0x10 && (mcast_groups_in_use.find(mgid) == mcast_groups_in_use.end()))
+				{
+					check_bf_status(pre_mgid->tableEntryDel(
+										*session, dev_tgt, *k),
+									"tableEntryDel");
+				}
+				else
+				{
+					/* Group is not deleted, hence record nodes */
+					vector<bf_rt_id_t> node_ids;
+					check_bf_status(d->getValue(field_id_node_id, &node_ids),
+									"d->getValue");
+
+					mcast_nodes_in_use.insert(node_ids.begin(), node_ids.end());
+				}
+			}
+		}
+
+		/* Nodes */
+		bf_rt_id_t field_id_node_node_id{};
+		check_bf_status(
+				pre_node->keyFieldIdGet(
+					"$MULTICAST_NODE_ID", &field_id_node_node_id),
+				"keyFieldIdGet");
+
+		{
+			table_iterator i(*pre_node, *session, dev_tgt);
+			for (; i; ++i)
+			{
+				auto k = (*i).first;
+
+				uint64_t node_id{};
+				check_bf_status(k->getValue(field_id_node_node_id, &node_id),
+								"k->getValue");
+
+				if (mcast_nodes_in_use.find(node_id) == mcast_nodes_in_use.end())
+				{
+					check_bf_status(pre_node->tableEntryDel(
+										*session, dev_tgt, *k),
+									"tableEntryDel");
+				}
+			}
+		}
+	}
+
+	/* clear registers */
+	for (auto i : agg_units_to_clear)
+	{
+		/* Agg unit value registers */
+		for (int j = 0; j < 32; j++)
+		{
+			char buf[3];
+			snprintf(buf, sizeof(buf), "%02d", j);
+			buf[2] = '\0';
+			string istr(buf);
+
+			const BfRtTable *tbl_values = nullptr;
+			check_bf_status(
+				bfrt_info->bfrtTableFromNameGet(
+					"Ingress.collectives.agg" + istr + ".values",
+					&tbl_values),
+				("Failed to resolve register table"));
+
+			check_bf_status(tbl_values->tableEntryMod(*session, dev_tgt,
+						*table_create_key<uint64_t>(tbl_values, {"$REGISTER_INDEX", i}),
+						*table_create_data<uint64_t, uint64_t>(
+							tbl_values,
+							{("Ingress.collectives.agg" + istr + ".values.low").c_str(), 0},
+							{("Ingress.collectives.agg" + istr + ".values.high").c_str(), 0}
+						)
+					),
+					"Clear values register failed");
+		}
+
+		/* State bitmaps */
+		const BfRtTable *tbl_state_low = nullptr;
+		check_bf_status(
+			bfrt_info->bfrtTableFromNameGet(
+				"Ingress.collectives.state_bitmaps_low",
+				&tbl_state_low),
+			("Failed to resolve state bitmap low table"));
+
+		check_bf_status(tbl_state_low->tableEntryMod(*session, dev_tgt,
+					*table_create_key<uint64_t>(tbl_state_low, {"$REGISTER_INDEX", i}),
+					*table_create_data<uint64_t>(
+						tbl_state_low,
+						{"Ingress.collectives.state_bitmaps_low.f1", 0}
+					)
+				),
+				"Clear state bitmap low failed");
+
+
+		const BfRtTable *tbl_state_high = nullptr;
+		check_bf_status(
+			bfrt_info->bfrtTableFromNameGet(
+				"Ingress.collectives.state_bitmaps_high",
+				&tbl_state_high),
+			("Failed to resolve state bitmap high table"));
+
+		check_bf_status(tbl_state_high->tableEntryMod(*session, dev_tgt,
+					*table_create_key<uint64_t>(tbl_state_high, {"$REGISTER_INDEX", i}),
+					*table_create_data<uint64_t>(
+						tbl_state_high,
+						{"Ingress.collectives.state_bitmaps_high.f1", 0}
+					)
+				),
+				"Clear state bitmap high failed");
+	}
 }

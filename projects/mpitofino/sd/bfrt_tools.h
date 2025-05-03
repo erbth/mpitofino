@@ -2,6 +2,7 @@
 #define __BFRT_TOOLS_H
 
 #include <string>
+#include <utility>
 #include <bf_rt/bf_rt.hpp>
 #include "common/utils.h"
 
@@ -227,6 +228,115 @@ inline bf_status_t table_add_or_mod(
 
 	return table.tableEntryAdd(session, dev_tgt, key, data);
 }
+
+
+class table_iterator
+{
+protected:
+	const BfRtTable& table;
+	const BfRtSession& session;
+	const bf_rt_target_t& dev_tgt;
+
+	uint32_t num_entries = 0;
+	uint32_t pos = 0;
+
+	std::unique_ptr<BfRtTableKey> cur_key;
+	std::unique_ptr<BfRtTableData> cur_data;
+
+	inline void reset()
+	{
+		cur_key = nullptr;
+		cur_data = nullptr;
+	}
+	
+	inline void allocate()
+	{
+		reset();
+		
+		check_bf_status(table.keyAllocate(&cur_key), "keyAllocate");
+		check_bf_status(table.dataAllocate(&cur_data), "dataAllocate");
+	}
+
+public:
+	inline table_iterator(
+		const BfRtTable& table,
+		const BfRtSession& session,
+		const bf_rt_target_t& dev_tgt)
+		: table(table), session(session), dev_tgt(dev_tgt)
+	{
+		uint64_t flags;
+		BF_RT_FLAG_INIT(flags);
+		BF_RT_FLAG_SET(flags, BF_RT_FROM_HW);
+
+		check_bf_status(
+			table.tableUsageGet(
+				session,
+				dev_tgt,
+				flags,
+				&num_entries),
+			"tableUsageGet");
+
+		if (num_entries > 0)
+		{
+			allocate();
+
+			BF_RT_FLAG_INIT(flags);
+			BF_RT_FLAG_SET(flags, BF_RT_FROM_HW);
+
+			check_bf_status(
+				table.tableEntryGetFirst(
+					session,
+					dev_tgt,
+					flags,
+					cur_key.get(),
+					cur_data.get()),
+				"tableEntryGetFirst");
+		}
+	}
+
+	inline void operator++()
+	{
+		std::unique_ptr<BfRtTableKey> prev_key = move(cur_key);
+		reset();
+
+		if (++pos < num_entries)
+		{
+			allocate();
+
+			uint64_t flags;
+			BF_RT_FLAG_INIT(flags);
+			BF_RT_FLAG_SET(flags, BF_RT_FROM_HW);
+
+			uint32_t n = 1, n_ret = 0;
+
+			BfRtTable::keyDataPairs kd_pairs{{cur_key.get(), cur_data.get()}};
+
+			check_bf_status(
+				table.tableEntryGetNext_n(
+					session,
+					dev_tgt,
+					flags,
+					*prev_key,
+					n,
+					&kd_pairs,
+					&n_ret),
+				"tableEntryGetNext_n");
+
+			if (n_ret != 1)
+				throw std::runtime_error("failed to retrieve next table entry");
+		}
+	}
+
+	inline operator bool() const
+	{
+		return cur_key != nullptr;
+	}
+
+	inline std::pair<const BfRtTableKey*, const BfRtTableData*> operator*() const
+	{
+		return {cur_key.get(), cur_data.get()};
+	}
+};
 
 };
 

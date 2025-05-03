@@ -78,7 +78,7 @@ parser IngressParser(
 		pkt.extract(hdr.udp);
 
 		transition select(hdr.udp.dst_port) {
-			0x4000 : parse_aggregate;
+			0x4000 &&& 0xc000 : parse_aggregate;
 			default : accept;
 		}
 	}

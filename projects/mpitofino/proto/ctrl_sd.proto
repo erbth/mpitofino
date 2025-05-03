@@ -31,8 +31,14 @@ message GetChannelResponse {
 }
 
 
+message UnrefChannel {
+	uint64 tag = 1;
+}
+
+
 message NdRequest {
 	oneof messages {
 		GetChannel get_channel = 1;
+		UnrefChannel unref_channel = 2;
 	}
 }

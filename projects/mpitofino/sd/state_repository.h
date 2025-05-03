@@ -94,6 +94,8 @@ public:
 		uint64_t tag, uint64_t client_id, IPv4Addr ip, uint16_t port,
 		MacAddr mac, uint16_t switch_port);
 
+	void remove_channel(uint64_t tag);
+
 	uint16_t get_free_coll_port();
 
 	/* publish/subscribe */

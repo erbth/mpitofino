@@ -148,6 +148,9 @@ control Collectives(
 
 		/* Recirculate */
 		ig_tm_md.ucast_egress_port = recirc_port;
+
+		/* Skip egress processing */
+		ig_tm_md.bypass_egress = 1;
 	}
 
 	action check_complete_next_pipe(PortId_t port) {

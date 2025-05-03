@@ -127,6 +127,17 @@ void StateRepository::update_channel_participant(
 	}
 }
 
+void StateRepository::remove_channel(uint64_t tag)
+{
+	auto i = channels.find(tag);
+	if (i == channels.end())
+		throw invalid_argument("No such channel");
+
+	channels.erase(i);
+
+	notify_subscribers(subscribers_channels);
+}
+
 
 uint16_t StateRepository::get_free_coll_port()
 {

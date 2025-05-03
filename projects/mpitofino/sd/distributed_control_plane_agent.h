@@ -3,6 +3,7 @@
 
 #include <list>
 #include <map>
+#include <set>
 #include "common/utils.h"
 #include "common/epoll.h"
 #include "ctrl_sd.pb.h"
@@ -19,6 +20,8 @@ struct Client final
 
 	Client(WrappedFD&& wfd, const struct sockaddr_in& addr);
 	Client(Client&&) = delete;
+
+	std::set<uint64_t> channels;
 };
 
 
@@ -39,11 +42,16 @@ protected:
 	void on_new_client(int, uint32_t);
 	void on_client_fd(Client* client, int fd, uint32_t events);
 	void on_client_get_channel(Client* client, const proto::ctrl_sd::GetChannel& msg);
+	void on_client_unref_channel(Client* client, const proto::ctrl_sd::UnrefChannel& msg);
 
 	std::map<
 		uint64_t,
 		std::map<Client*, proto::ctrl_sd::GetChannelResponse>>
 	pending_get_channel_responses;
+
+
+	void check_remove_channel(uint64_t tag);
+	void check_remove_channels(const std::set<uint64_t>& channels);
 
 
 public:

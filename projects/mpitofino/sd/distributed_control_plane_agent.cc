@@ -116,6 +116,10 @@ void Agent::on_client_fd(Client* client, int fd, uint32_t events)
 				on_client_get_channel(client, msg->get_channel());
 				break;
 
+			case proto::ctrl_sd::NdRequest::kUnrefChannel:
+				on_client_unref_channel(client, msg->unref_channel());
+				break;
+
 			default:
 				throw runtime_error("Unsupported message from client");
 			}
@@ -138,6 +142,11 @@ void Agent::on_client_fd(Client* client, int fd, uint32_t events)
 				   to_string(client->addr).c_str());
 
 			epoll.remove_fd(client->wfd.get_fd());
+
+			/* Check if any channels need to be removed */
+			set<uint64_t> channels = move(client->channels);
+			check_remove_channels(channels);
+			
 			clients.erase(i);
 		}
 	}
@@ -149,7 +158,7 @@ void Agent::on_client_get_channel(Client* client, const proto::ctrl_sd::GetChann
 	/* Check if the channel exists already */
 	auto ch = st_repo.get_channel(msg.tag());
 
-	/* If not, allocate it, otherwise check for matching parameters */
+	/* If not, allocate it */
 	if (!ch)
 	{
 		CollectiveChannel c;
@@ -159,6 +168,7 @@ void Agent::on_client_get_channel(Client* client, const proto::ctrl_sd::GetChann
 		c.fabric_port = st_repo.get_free_coll_port();
 		c.fabric_mac = st_repo.get_collectives_module_mac_addr();
 
+		/* TODO allocate a free unit */
 		c.agg_unit = 0;
 
 		for (auto cid : msg.agg_group_client_ids())
@@ -179,6 +189,9 @@ void Agent::on_client_get_channel(Client* client, const proto::ctrl_sd::GetChann
 		if (pi != pending_get_channel_responses.end())
 			pending_get_channel_responses.erase(pi);
 	}
+
+	/* Declare ownership */
+	client->channels.insert(ch->tag);
 
 	/* Update client parameters */
 	auto client_ip = msg.client_ip();
@@ -217,6 +230,50 @@ void Agent::on_client_get_channel(Client* client, const proto::ctrl_sd::GetChann
 
 		pending_get_channel_responses.erase(pi);
 	}
+}
+
+
+void Agent::on_client_unref_channel(Client* client, const proto::ctrl_sd::UnrefChannel& msg)
+{
+	auto i = client->channels.find(msg.tag());
+	if (i == client->channels.end())
+	{
+		fprintf(stderr,
+				"WARNING: Client unrefernced channel which it does not own (id: %lu)\n",
+				(unsigned long) msg.tag());
+
+		return;
+	}
+	
+	client->channels.erase(i);
+	check_remove_channel(msg.tag());
+}
+
+
+void Agent::check_remove_channel(uint64_t tag)
+{
+	size_t owners = 0;
+	for (auto& oc : clients)
+	{
+		if (oc.channels.find(tag) != oc.channels.end())
+			owners++;
+	}
+
+	if (owners == 0)
+	{
+		printf("Removing collective channel with tag %lu\n",
+				(unsigned long) tag);
+
+		st_repo.remove_channel(tag);
+	}
+}
+
+void Agent::check_remove_channels(const set<uint64_t>& channels)
+{
+	/* Check if any channels need to be removed
+	   IMPROVE: use an index instead of O(n**2) search */
+	for (auto ch_tag : channels)
+		check_remove_channel(ch_tag);
 }
 
 
