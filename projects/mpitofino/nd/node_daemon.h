@@ -5,6 +5,8 @@
 #include <functional>
 #include <string>
 #include <list>
+#include <tuple>
+#include <map>
 #include <set>
 #include "common/epoll.h"
 #include "common/signalfd.h"
@@ -24,7 +26,14 @@ struct Client final
 	Client(WrappedFD&& wfd);
 	Client(Client&&) = delete;
 
-	std::set<uint64_t> channels;
+	/* tag -> local port */
+	std::map<uint64_t, uint16_t> channels;
+
+	/* (client_id, tag) -> get_channel response */
+	std::map<
+		std::tuple<uint64_t, uint64_t>,
+		GetChannelResponse>
+	pending_get_channel_responses;
 
 	inline int get_fd()
 	{
@@ -73,6 +82,10 @@ protected:
 
 	void on_client_fd(Client* c, int fd, uint32_t events);
 	void on_client_get_channel(Client* c, const GetChannel& msg);
+
+	/* Local port allocator */
+	uint16_t next_coll_port{};
+	uint16_t get_free_coll_port();
 
 
 	/* Topology discovery/change */

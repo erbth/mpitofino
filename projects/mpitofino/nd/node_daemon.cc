@@ -226,7 +226,7 @@ void NodeDaemon::on_client_fd(Client* c, int fd, uint32_t events)
 			/* Check if the channels used by the client are still in
 			   use by other clients, otherwise unref them at the
 			   switch. */
-			for (auto ch_tag : c->channels)
+			for (auto [ch_tag,ch_local_port] : c->channels)
 			{
 				size_t users = 0;
 
@@ -263,12 +263,10 @@ void NodeDaemon::on_client_get_channel(Client* c, const GetChannel& msg)
 		return;
 
 
-	c->channels.insert(msg.tag());
-	
-
 	/* Allocate local port */
-	/* TODO: Implement allocator */
-	uint16_t local_port = 0x4000;
+	uint16_t local_port = get_free_coll_port();
+
+	c->channels.insert({msg.tag(), local_port});
 
 	/* Request channel from switch */
 	proto::ctrl_sd::NdRequest switch_req;
@@ -291,28 +289,48 @@ void NodeDaemon::on_client_get_channel(Client* c, const GetChannel& msg)
 
 	send_protobuf_message_simple_stream(switch_wfd.get_fd(), switch_req);
 
-
-	/* Wait for reply */
-	auto switch_resp = recv_protobuf_message_simple_stream<
-		proto::ctrl_sd::GetChannelResponse>(switch_wfd.get_fd());
-
-	if (switch_resp->client_id() != msg.client_id() ||
-		switch_resp->tag() != msg.tag())
-	{
-		throw runtime_error("Invalid response from switch");
-	}
-
-	
-	/* Reply */
+	/* Enqueue reply onto pending get_channel responses list */
 	GetChannelResponse reply;
 
 	reply.set_local_port(local_port);
 	reply.set_local_ip(hpn_node_addr.sin_addr.s_addr);
 
-	reply.set_fabric_port(switch_resp->fabric_port());
-	reply.set_fabric_ip(switch_resp->fabric_ip());
+	c->pending_get_channel_responses.try_emplace({msg.client_id(), msg.tag()}, reply);
+}
 
-	send_protobuf_message_simple_dgram(c->get_fd(), reply);
+
+uint16_t NodeDaemon::get_free_coll_port()
+{
+	int cnt_wraps = 0;
+	
+	while (cnt_wraps < 2)
+	{
+		if (next_coll_port < 0x4000 || next_coll_port >= 0x8000)
+		{
+			next_coll_port = 0x4000;
+			cnt_wraps++;
+		}
+
+		auto port = next_coll_port++;
+
+		bool taken = false;
+		for (auto& c : clients)
+		{
+			for (auto& [t,ch_port] : c.channels)
+			{
+				if (ch_port == port)
+				{
+					taken = true;
+					break;
+				}
+			}
+		}
+
+		if (!taken)
+			return port;
+	}
+
+	throw runtime_error("No free local port for collectives");
 }
 
 
@@ -417,8 +435,37 @@ void NodeDaemon::on_switch_fd(int fd, uint32_t events)
 	
 	if (events & EPOLLIN)
 	{
-		/* IMPROVE: Support requests from the switch */
-		throw runtime_error("not implemented");
+		/* IMPROVE: Support different requests from the switch */
+		auto switch_resp = recv_protobuf_message_simple_stream<
+			proto::ctrl_sd::GetChannelResponse>(switch_wfd.get_fd());
+
+		/* Find corresponding outstanding response */
+		bool processed = false;
+		for (auto& c : clients)
+		{
+			auto i = c.pending_get_channel_responses.find(
+				{switch_resp->client_id(), switch_resp->tag()});
+
+			if (i == c.pending_get_channel_responses.end())
+				continue;
+
+			/* Complete get_channel response and reply */
+			auto& reply = i->second;
+
+			reply.set_fabric_port(switch_resp->fabric_port());
+			reply.set_fabric_ip(switch_resp->fabric_ip());
+
+			send_protobuf_message_simple_dgram(c.get_fd(), reply);
+
+			processed = true;
+			break;
+		}
+
+		if (!processed)
+		{
+			fprintf(stderr, "received get_channel response from switch for "
+					"non-existent client\n");
+		}
 	}
 
 	if (disconnect)
