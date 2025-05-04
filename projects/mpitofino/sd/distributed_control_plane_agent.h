@@ -2,6 +2,7 @@
 #define __DISTRIBUTED_CONTROL_PLANE_AGENT_H
 
 #include <list>
+#include <vector>
 #include <map>
 #include <set>
 #include "common/utils.h"
@@ -46,7 +47,7 @@ protected:
 
 	std::map<
 		uint64_t,
-		std::map<Client*, proto::ctrl_sd::GetChannelResponse>>
+		std::vector<std::tuple<Client*, proto::ctrl_sd::GetChannelResponse>>>
 	pending_get_channel_responses;
 
 

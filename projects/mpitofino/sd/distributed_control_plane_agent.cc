@@ -219,7 +219,7 @@ void Agent::on_client_get_channel(Client* client, const proto::ctrl_sd::GetChann
 	immediately with the TM once implemented.) */
 	auto [pi,p_inserted] = pending_get_channel_responses.try_emplace(ch->tag);
 	auto& pm = pi->second;
-	pm.insert({client, resp});
+	pm.push_back({client, resp});
 
 	/* Check if all clients have responded and if yes, forward replies */
 	if (pm.size() == ch->participants.size())
