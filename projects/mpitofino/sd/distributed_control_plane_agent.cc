@@ -168,8 +168,7 @@ void Agent::on_client_get_channel(Client* client, const proto::ctrl_sd::GetChann
 		c.fabric_port = st_repo.get_free_coll_port();
 		c.fabric_mac = st_repo.get_collectives_module_mac_addr();
 
-		/* TODO allocate a free unit */
-		c.agg_unit = 0;
+		c.agg_unit = st_repo.get_free_agg_unit();
 
 		for (auto cid : msg.agg_group_client_ids())
 		{

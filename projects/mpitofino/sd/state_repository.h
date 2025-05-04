@@ -22,7 +22,6 @@ struct CollectiveChannel final
 	uint16_t fabric_port{};
 	MacAddr fabric_mac;
 
-	/* 8 consecutive aggregation units share a multicast group */
 	uint16_t agg_unit{};
 	
 	struct Participant
@@ -97,6 +96,7 @@ public:
 	void remove_channel(uint64_t tag);
 
 	uint16_t get_free_coll_port();
+	uint16_t get_free_agg_unit();
 
 	/* publish/subscribe */
 	void* subscribe_channels(subscriber_t sub);

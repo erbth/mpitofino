@@ -170,6 +170,31 @@ uint16_t StateRepository::get_free_coll_port()
 	throw runtime_error("No free fabric port for collectives");
 }
 
+uint16_t StateRepository::get_free_agg_unit()
+{
+	uint16_t unit = 0;
+
+	/* TODO make table sizes etc. consistent and put the correct
+	capacity here */
+	for (; unit < 256; unit++)
+	{
+		bool taken = false;
+		for (auto& [t,c] : channels)
+		{
+			if (c.agg_unit == unit)
+			{
+				taken = true;
+				break;
+			}
+		}
+
+		if (!taken)
+			return unit;
+	}
+
+	throw runtime_error("No free aggregation unit");
+}
+
 
 void* StateRepository::subscribe_channels(subscriber_t sub)
 {

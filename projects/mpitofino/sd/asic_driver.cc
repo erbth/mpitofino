@@ -438,7 +438,7 @@ void ASICDriver::on_st_repo_channels()
 
 		agg_units_in_use.insert(rc->agg_unit);
 
-		uint16_t mcast_grp = 0x10 + rc->agg_unit / 8;
+		uint16_t mcast_grp = 0x10 + rc->agg_unit;
 
 		mcast_groups_in_use.insert(mcast_grp);
 
