@@ -1,0 +1,429 @@
+diff -ruN ompi2/ompi/mca/coll/mtof/coll_mtof_component.c ompi/ompi/mca/coll/mtof/coll_mtof_component.c
+--- ompi2/ompi/mca/coll/mtof/coll_mtof_component.c	1970-01-01 01:00:00.000000000 +0100
++++ ompi/ompi/mca/coll/mtof/coll_mtof_component.c	2025-05-10 22:37:30.500000000 +0200
+@@ -0,0 +1,56 @@
++#include <stdio.h>
++#include "ompi_config.h"
++
++#include "mpi.h"
++#include "ompi/mca/coll/coll.h"
++#include "coll_mtof.h"
++
++
++const char* mca_coll_mtof_component_version_string =
++	"mpitofino collective MCA component version " OMPI_VERSION;
++
++
++static int mtof_register(void);
++static int mtof_open(void);
++static int mtof_close(void);
++
++
++/* Public struct */
++mca_coll_mtof_component_t mca_coll_mtof_component = {
++	.super = {
++		.collm_version = {
++			MCA_COLL_BASE_VERSION_2_0_0,
++			.mca_component_name = "mtof",
++			MCA_BASE_MAKE_VERSION(component, OMPI_MAJOR_VERSION, OMPI_MINOR_VERSION,
++								OMPI_RELEASE_VERSION),
++
++			.mca_open_component = mtof_open,
++			.mca_close_component = mtof_close,
++			.mca_register_component_params = mtof_register
++		},
++		.collm_data = {
++			MCA_BASE_METADATA_PARAM_NONE
++		},
++
++		.collm_init_query = mca_coll_mtof_init_query,
++		.collm_comm_query = mca_coll_mtof_comm_query
++	}
++};
++
++
++static int mtof_register(void)
++{
++	return OMPI_SUCCESS;
++}
++
++
++static int mtof_open(void)
++{
++	return OMPI_SUCCESS;
++}
++
++
++static int mtof_close(void)
++{
++	return OMPI_SUCCESS;
++}
+diff -ruN ompi2/ompi/mca/coll/mtof/coll_mtof.h ompi/ompi/mca/coll/mtof/coll_mtof.h
+--- ompi2/ompi/mca/coll/mtof/coll_mtof.h	1970-01-01 01:00:00.000000000 +0100
++++ ompi/ompi/mca/coll/mtof/coll_mtof.h	2025-05-11 18:03:31.636000000 +0200
+@@ -0,0 +1,70 @@
++#ifndef MCA_COLL_MTOF_EXPORT_H
++#define MCA_COLL_MTOF_EXPORT_H
++
++#include "ompi_config.h"
++
++#include "mpi.h"
++#include "ompi/mca/mca.h"
++#include "ompi/mca/coll/coll.h"
++
++#include <mpitofino.h>
++
++BEGIN_C_DECLS
++
++
++typedef struct
++{
++	mca_coll_base_component_2_0_0_t super;
++}
++mca_coll_mtof_component_t;
++
++OMPI_MODULE_DECLSPEC extern mca_coll_mtof_component_t mca_coll_mtof_component;
++
++
++/* Component functions */
++int mca_coll_mtof_init_query(bool enable_progress_threads,
++							 bool enable_mpi_threads);
++
++mca_coll_base_module_t* mca_coll_mtof_comm_query(
++	struct ompi_communicator_t* comm, int* priority);
++
++
++
++typedef struct
++{
++	mpitofino_datatype_t dtype;
++	mpitofino_tag_t tag;
++
++	/* IMPROVE: add operation */
++} mca_coll_mtof_channel_t;
++
++struct mca_coll_mtof_module_t
++{
++	mca_coll_base_module_t super;
++
++	mpitofino_ctx_t* ctx;
++	mpitofino_aggregation_group_t* agg_group;
++
++	/* A collective channel may not change type and operation - hence keep a
++	   channel per this key cached. */
++	size_t channels_size;
++	size_t channels_capacity;
++	mca_coll_mtof_channel_t* channels;
++
++	uint64_t channel_tag_base;
++};
++typedef struct mca_coll_mtof_module_t mca_coll_mtof_module_t;
++OBJ_CLASS_DECLARATION(mca_coll_mtof_module_t);
++
++
++/* Prototypes for operations */
++int mca_coll_mtof_allreduce(const void *sbuf, void*rbuf, int count,
++							struct ompi_datatype_t* dtype,
++							struct ompi_op_t* op,
++							struct ompi_communicator_t* comm,
++							mca_coll_base_module_t* base_module);
++
++
++END_C_DECLS
++
++#endif /* MCA_COLL_MTOF_EXPORT_H */
+diff -ruN ompi2/ompi/mca/coll/mtof/coll_mtof_module.c ompi/ompi/mca/coll/mtof/coll_mtof_module.c
+--- ompi2/ompi/mca/coll/mtof/coll_mtof_module.c	1970-01-01 01:00:00.000000000 +0100
++++ ompi/ompi/mca/coll/mtof/coll_mtof_module.c	2025-05-11 20:12:04.012000000 +0200
+@@ -0,0 +1,137 @@
++#include <stdio.h>
++#include <string.h>
++#include "ompi_config.h"
++#include "coll_mtof.h"
++#include "ompi/communicator/communicator.h"
++
++
++int mca_coll_mtof_init_query(bool enable_progress_threads, bool enable_mpi_threads)
++{
++	if (enable_mpi_threads)
++	{
++		fprintf(stderr, "MPI_THREAD_MULTIPLE not supported; skipping mtof component");
++		return OMPI_ERROR;
++	}
++
++	return OMPI_SUCCESS;
++}
++
++
++static int mca_coll_mtof_module_enable(
++	mca_coll_base_module_t* base_module,
++	struct ompi_communicator_t* comm)
++{
++	return OMPI_SUCCESS;
++}
++
++
++uint32_t get_app_name_hash()
++{
++	FILE* f = fopen("/proc/self/cmdline", "r");
++	if (!f)
++	{
++		fprintf(stderr, "failed to read cmdline");
++		exit(1);
++	}
++
++	char buf[4096];
++	ssize_t ret = fread(buf, 1, sizeof(buf), f);
++	fclose(f);
++
++	if (ret <= 0)
++	{
++		fprintf(stderr, "failed to read cmdline");
++		exit(1);
++	}
++
++	uint32_t val = 0xaa55aa55;
++	for (ssize_t i = 0; i < ret; i++)
++	{
++		char c = buf[i];
++
++		val ^= val << 7;
++		val ^= val << 20;
++
++		val ^= c;
++	}
++
++	return val;
++}
++
++
++/* Invoked when a new communicator has been created */
++mca_coll_base_module_t* mca_coll_mtof_comm_query(
++	struct ompi_communicator_t* comm, int* priority)
++{
++	/* Inter-communicators cannot be used for collective communication */
++	if (OMPI_COMM_IS_INTER(comm) || ompi_comm_size(comm) < 2)
++		return NULL;
++
++	/* Create module */
++	mca_coll_mtof_module_t* module = OBJ_NEW(mca_coll_mtof_module_t);
++	if (!module)
++		return NULL;
++
++	/* Create client */
++	module->ctx = mpitofino_create_ctx(ompi_comm_rank(comm));
++	if (!module->ctx)
++	{
++		OBJ_RELEASE(module);
++		return NULL;
++	}
++
++	/* Create aggregation group */
++	const size_t cnt_client_ids = ompi_comm_size(comm);
++	mpitofino_client_id_t client_ids[cnt_client_ids];
++
++	for (size_t i = 0; i < cnt_client_ids; i++)
++		client_ids[i] = i;
++	
++	module->agg_group = mpitofino_create_aggregation_group(
++		module->ctx, client_ids, cnt_client_ids);
++
++	/* Populate operations table */
++	module->super.coll_module_enable = mca_coll_mtof_module_enable;
++	module->super.coll_allreduce = mca_coll_mtof_allreduce;
++
++	/* Determine a tag base that is unique across all applications running
++	   concurrently on the cluster */
++	/* IMPROVE: use something with lower collision probability, or idealy
++	   allocate ids */
++	uint32_t app_name_hash = get_app_name_hash();
++	module->channel_tag_base = ompi_comm_get_cid(comm) + ((uint64_t) app_name_hash) << 32UL;
++
++	*priority = 100;
++
++	return (mca_coll_base_module_t*) module;
++}
++
++
++static void mca_coll_mtof_module_construct(mca_coll_mtof_module_t* module)
++{
++	module->ctx = NULL;
++	module->agg_group = NULL;
++
++	module->channels_size = module->channels_capacity = 0;
++	module->channels = NULL;
++
++	module->channel_tag_base = 0;
++}
++
++static void mca_coll_mtof_module_destruct(mca_coll_mtof_module_t* module)
++{
++	if (module->agg_group)
++		mpitofino_destroy_aggregation_group(module->agg_group);
++	
++	if (module->ctx)
++		mpitofino_destroy_ctx(module->ctx);
++
++	if (module->channels)
++		free(module->channels);
++}
++
++
++OBJ_CLASS_INSTANCE(mca_coll_mtof_module_t,
++				   mca_coll_base_module_t,
++				   mca_coll_mtof_module_construct,
++				   mca_coll_mtof_module_destruct);
+diff -ruN ompi2/ompi/mca/coll/mtof/coll_mtof_ops.c ompi/ompi/mca/coll/mtof/coll_mtof_ops.c
+--- ompi2/ompi/mca/coll/mtof/coll_mtof_ops.c	1970-01-01 01:00:00.000000000 +0100
++++ ompi/ompi/mca/coll/mtof/coll_mtof_ops.c	2025-05-11 20:06:33.624000000 +0200
+@@ -0,0 +1,107 @@
++#include <stdio.h>
++#include <mpitofino.h>
++#include "ompi_config.h"
++#include "ompi/datatype/ompi_datatype.h"
++#include "ompi/datatype/ompi_datatype_internal.h"
++#include "ompi/op/op.h"
++#include "coll_mtof.h"
++
++
++static int translate_dtype(
++	struct ompi_datatype_t* dtype, mpitofino_datatype_t* m_dtype)
++{
++	if (dtype->id < OMPI_DATATYPE_MPI_MAX_PREDEFINED &&
++		dtype->super.flags & OMPI_DATATYPE_FLAG_PREDEFINED &&
++		dtype->super.id > 0 && dtype->super.id < OPAL_DATATYPE_MAX_PREDEFINED)
++	{
++		switch (dtype->super.id)
++		{
++		case OPAL_DATATYPE_INT4:
++			*m_dtype = MPITOFINO_DATATYPE_INT32;
++			return 0;
++			
++		default:
++			break;
++		};
++	}
++
++	return -1;
++}
++
++
++uint64_t generate_tag(mca_coll_mtof_module_t* module, uint64_t discriminator)
++{
++	return module->channel_tag_base + discriminator;
++}
++
++
++mpitofino_tag_t get_channel(mca_coll_mtof_module_t* module, mpitofino_datatype_t dtype)
++{
++	/* Lookup channel map */
++	for (size_t i = 0; i < module->channels_size; i++)
++	{
++		if (module->channels[i].dtype == dtype)
++			return module->channels[i].tag;
++	}
++
++	/* Allocate channel tag */
++	if (module->channels_capacity < module->channels_size + 1)
++	{
++		size_t new_cap = module->channels_capacity * 2;
++		if (new_cap == 0)
++			new_cap = 16;
++		
++		mca_coll_mtof_channel_t* new_channels = realloc(
++			module->channels, new_cap * sizeof(*module->channels));
++
++		if (!new_channels)
++		{
++			perror("realloc");
++			exit(1);
++		}
++
++		module->channels = new_channels;
++		module->channels_capacity = new_cap;
++	}
++
++	/* Create random tag (must be unique across all applications running
++	   concurrently) */
++	mpitofino_tag_t new_tag = generate_tag(module, module->channels_size);
++
++	mca_coll_mtof_channel_t* ch = module->channels + module->channels_size++;
++	ch->tag = new_tag;
++	ch->dtype = dtype;
++
++	return new_tag;
++}
++
++
++int mca_coll_mtof_allreduce(const void *sbuf, void*rbuf, int count,
++							struct ompi_datatype_t* dtype,
++							struct ompi_op_t* op,
++							struct ompi_communicator_t* comm,
++							mca_coll_base_module_t* base_module)
++{
++	mca_coll_mtof_module_t* module = (mca_coll_mtof_module_t*) base_module;
++
++	/* Map datatype */
++	mpitofino_datatype_t m_dtype;
++	if (translate_dtype(dtype, &m_dtype) < 0)
++		return MPI_ERR_TYPE;
++
++	/* Map op */
++	if (op->op_type != OMPI_OP_SUM)
++		return MPI_ERR_OP;
++
++	/* Perform allreduce */
++	mpitofino_tag_t tag = get_channel(module, m_dtype);
++
++	int ret = mpitofino_allreduce(
++		module->agg_group,
++		sbuf, rbuf, count, m_dtype, tag);
++
++	if (ret)
++		return MPI_ERR_IO;
++
++	return MPI_SUCCESS;
++}
+diff -ruN ompi2/ompi/mca/coll/mtof/configure.stub ompi/ompi/mca/coll/mtof/configure.stub
+--- ompi2/ompi/mca/coll/mtof/configure.stub	1970-01-01 01:00:00.000000000 +0100
++++ ompi/ompi/mca/coll/mtof/configure.stub	2025-05-07 18:32:20.768000000 +0200
+@@ -0,0 +1,3 @@
++# -*- shell-script -*-
++
++AC_DEFUN([MCA_CONFIGURE_STUB],[])
+diff -ruN ompi2/ompi/mca/coll/mtof/Makefile.am ompi/ompi/mca/coll/mtof/Makefile.am
+--- ompi2/ompi/mca/coll/mtof/Makefile.am	1970-01-01 01:00:00.000000000 +0100
++++ ompi/ompi/mca/coll/mtof/Makefile.am	2025-05-10 22:48:28.280000000 +0200
+@@ -0,0 +1,32 @@
++# -*- shell-script -*-
++
++sources = \
++		coll_mtof.h \
++		coll_mtof_component.c \
++		coll_mtof_module.c \
++		coll_mtof_ops.c
++
++# Make the output library in this directory, and name it either
++# mca_<type>_<name>.la (for DSO builds) or libmca_<type>_<name>.la
++# (for static builds).
++
++if MCA_BUILD_ompi_coll_mtof_DSO
++component_noinst =
++component_install = mca_coll_mtof.la
++else
++component_noinst = libmca_coll_mtof.la
++component_install =
++endif
++
++mcacomponentdir = $(ompilibdir)
++mcacomponent_LTLIBRARIES = $(component_install)
++mca_coll_mtof_la_SOURCES = $(sources)
++mca_coll_mtof_la_CFLAGS  = -I../../../../../../mpitofino/client_lib/include
++mca_coll_mtof_la_LDFLAGS = -module -avoid-version -L../../../../../../mpitofino/build/client_lib
++mca_coll_mtof_la_LIBADD  = $(top_builddir)/ompi/lib@OMPI_LIBMPI_NAME@.la -lmpitofino
++
++noinst_LTLIBRARIES = $(component_noinst)
++libmca_coll_mtof_la_SOURCES = $(sources)
++libmca_coll_mtof_la_CFLAGS  = -I../../../../../../mpitofino/client_lib/include
++libmca_coll_mtof_la_LDFLAGS = -module -avoid-version -L../../../../../../mpitofino/build/client_lib
++libmca_coll_mtof_la_LIBADD  = -lmpitofino

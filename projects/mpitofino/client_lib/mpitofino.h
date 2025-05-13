@@ -21,6 +21,8 @@ namespace mpitofino
 
 typedef uint64_t tag_t;
 
+/* NOTE: This enum does also exist in the public header. Keep in sync
+when updating. */
 enum class datatype_t
 {
 	INT32 = 1
