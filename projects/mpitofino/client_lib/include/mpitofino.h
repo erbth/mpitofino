@@ -15,10 +15,10 @@ typedef struct _mpitofino_aggregation_group_t mpitofino_aggregation_group_t;
 typedef uint64_t mpitofino_client_id_t;
 typedef uint64_t mpitofino_tag_t;
 
-enum mpitofino_datatype_t
+typedef enum
 {
 	MPITOFINO_DATATYPE_INT32 = 1
-};
+} mpitofino_datatype_t;
 
 
 mpitofino_ctx_t* mpitofino_create_ctx(mpitofino_client_id_t client_id);

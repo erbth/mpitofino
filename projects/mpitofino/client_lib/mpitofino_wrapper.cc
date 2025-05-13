@@ -38,10 +38,14 @@ SHLIB_EXPORTED mpitofino_ctx_t* mpitofino_create_ctx(mpitofino_client_id_t clien
 			throw;
 		}
 	}
+	catch (const exception& e)
+	{
+		fprintf(stderr, "LIBMPITOFINO: ERROR: %s\n", e.what());
+	}
 	catch (...)
 	{
-		return nullptr;
 	}
+	return nullptr;
 }
 
 SHLIB_EXPORTED void mpitofino_destroy_ctx(mpitofino_ctx_t* ctx)
@@ -82,10 +86,14 @@ SHLIB_EXPORTED mpitofino_aggregation_group_t* mpitofino_create_aggregation_group
 			throw;
 		}
 	}
+	catch (const exception& e)
+	{
+		fprintf(stderr, "LIBMPITOFINO: ERROR: %s\n", e.what());
+	}
 	catch (...)
 	{
-		return nullptr;
 	}
+	return nullptr;
 }
 
 SHLIB_EXPORTED void mpitofino_destroy_aggregation_group(

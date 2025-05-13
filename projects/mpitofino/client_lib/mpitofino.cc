@@ -220,7 +220,7 @@ void AggregationGroup::allreduce(
 					"sendto(collective channel)");
 		}
 
-		printf("sent\n");
+		//printf("sent\n");
 
 
 		/* Receive block */
@@ -234,7 +234,7 @@ void AggregationGroup::allreduce(
 			throw system_error(errno, generic_category(),
 					"recvfrom(collective channel)");
 
-		printf("received\n");
+		//printf("received\n");
 
 		convert_endianess(buf, (uint8_t*) dbuf + i, to_send, dtype);
 	}
