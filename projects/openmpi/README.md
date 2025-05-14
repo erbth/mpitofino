@@ -79,7 +79,10 @@ Note that the current working directory to execute this command was
 transports for PML (p2p messaging) is required to run with the
 tofino-model as switch. This is probably the case because the model is
 slow and OpenMPI might tolerate only a certain latency before
-asserting a timeout condition.
+asserting a timeout condition. Specifying an `XDG_RUNTIME_DIR` should
+usually not be required, unless your development system does not have
+a `/run/user/<id>` directory and the environment variable pointing to
+it.
 
 The other `coll` mca components are required to implement the
 operations `mtof` does not provide.
