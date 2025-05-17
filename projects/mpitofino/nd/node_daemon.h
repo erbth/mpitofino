@@ -26,8 +26,8 @@ struct Client final
 	Client(WrappedFD&& wfd);
 	Client(Client&&) = delete;
 
-	/* tag -> local port */
-	std::map<uint64_t, uint16_t> channels;
+	/* tag -> local qp */
+	std::map<uint64_t, uint32_t> channels;
 
 	/* (client_id, tag) -> get_channel response */
 	std::map<
@@ -82,10 +82,6 @@ protected:
 
 	void on_client_fd(Client* c, int fd, uint32_t events);
 	void on_client_get_channel(Client* c, const GetChannel& msg);
-
-	/* Local port allocator */
-	uint16_t next_coll_port{};
-	uint16_t get_free_coll_port();
 
 
 	/* Topology discovery/change */

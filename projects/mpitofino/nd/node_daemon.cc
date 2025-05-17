@@ -263,10 +263,7 @@ void NodeDaemon::on_client_get_channel(Client* c, const GetChannel& msg)
 		return;
 
 
-	/* Allocate local port */
-	uint16_t local_port = get_free_coll_port();
-
-	c->channels.insert({msg.tag(), local_port});
+	c->channels.insert({msg.tag(), msg.local_qp()});
 
 	/* Request channel from switch */
 	proto::ctrl_sd::NdRequest switch_req;
@@ -282,7 +279,7 @@ void NodeDaemon::on_client_get_channel(Client* c, const GetChannel& msg)
 	uint64_t client_mac;
 	memcpy(&client_mac, &hpn_node_mac, sizeof(hpn_node_mac));
 
-	sgc->set_client_port(local_port);
+	sgc->set_client_qp(msg.local_qp());
 	sgc->set_client_ip(hpn_node_addr.sin_addr.s_addr);
 	sgc->set_client_mac(client_mac);
 	sgc->set_switch_port(switch_port);
@@ -291,10 +288,6 @@ void NodeDaemon::on_client_get_channel(Client* c, const GetChannel& msg)
 
 	/* Enqueue reply onto pending get_channel responses list */
 	GetChannelResponse reply;
-
-	reply.set_local_port(local_port);
-	reply.set_local_ip(hpn_node_addr.sin_addr.s_addr);
-
 	c->pending_get_channel_responses.try_emplace({msg.client_id(), msg.tag()}, reply);
 }
 
@@ -452,8 +445,8 @@ void NodeDaemon::on_switch_fd(int fd, uint32_t events)
 			/* Complete get_channel response and reply */
 			auto& reply = i->second;
 
-			reply.set_fabric_port(switch_resp->fabric_port());
 			reply.set_fabric_ip(switch_resp->fabric_ip());
+			reply.set_fabric_qp(switch_resp->fabric_qp());
 
 			send_protobuf_message_simple_dgram(c.get_fd(), reply);
 

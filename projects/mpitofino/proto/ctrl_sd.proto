@@ -16,7 +16,7 @@ message GetChannel {
 	ChannelType type = 4;
 
 	/* Client-'portal' for dataplane traffic */
-	uint32 client_port = 5;
+	uint32 client_qp = 5;
 	uint32 client_ip = 6;
 	uint64 client_mac = 7;
 	uint32 switch_port = 8;
@@ -27,7 +27,7 @@ message GetChannelResponse {
 	uint64 tag = 2;
 
 	uint32 fabric_ip = 3;
-	uint32 fabric_port = 4;
+	uint32 fabric_qp = 4;
 }
 
 

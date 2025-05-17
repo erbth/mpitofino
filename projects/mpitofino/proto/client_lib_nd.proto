@@ -8,14 +8,13 @@ message GetChannel {
 	uint64 client_id = 2;
 	ChannelType type = 3;
 	uint64 tag = 4;  // Unique through the entire cluster; e.g. a tuple (application id, MPI tag)
+
+	uint32 local_qp = 5;  // Local IB QP id
 }
 
 message GetChannelResponse {
-	uint32 local_ip = 2;
-	uint32 local_port = 3;
-
-	uint32 fabric_ip = 4;
-	uint32 fabric_port = 5;
+	uint32 fabric_ip = 1;
+	uint32 fabric_qp = 2;
 }
 
 

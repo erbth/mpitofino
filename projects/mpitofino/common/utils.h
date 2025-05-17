@@ -2,8 +2,10 @@
 #define __COMMON_UTILS_H
 
 #include <cstdint>
+#include <stdexcept>
 #include <system_error>
 #include <string>
+#include <functional>
 
 extern "C" {
 #include <unistd.h>
@@ -110,6 +112,75 @@ inline T check_syscall(T ret, const char* msg)
 	return ret;
 }
 /* End copied from sdfs */
+
+template <typename T>
+class WrappedObject final
+{
+public:
+	using destructor_t = std::function<void(T*)>;
+protected:
+	T* ptr{};
+	destructor_t destructor;
+
+	inline void destruct()
+	{
+		if (ptr)
+		{
+			destructor(ptr);
+			ptr = nullptr;
+		}
+	}
+
+public:
+	inline WrappedObject(destructor_t destructor)
+		: destructor(destructor)
+	{
+	};
+
+	inline WrappedObject& operator=(WrappedObject&& o)
+	{
+		destruct();
+
+		destructor = o.destructor;
+		ptr = o.ptr;
+
+		o.ptr = nullptr;
+
+		return *this;
+	}
+
+	inline WrappedObject& operator=(T* ptr)
+	{
+		destruct();
+
+		this->ptr = ptr;
+
+		return *this;
+	}
+
+	inline T* operator->()
+	{
+		if (!ptr)
+			throw std::runtime_error("bad object");
+
+		return ptr;
+	}
+	
+	inline ~WrappedObject()
+	{
+		destruct();
+	}
+
+	inline operator bool()
+	{
+		return ptr != nullptr;
+	}
+
+	T* get()
+	{
+		return ptr;
+	}
+};
 
 std::string to_hex_string(int i);
 

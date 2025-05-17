@@ -7,7 +7,9 @@
 #include <memory>
 #include <map>
 #include <filesystem>
+#include <infiniband/verbs.h>
 #include "common/utils.h"
+#include "common/dynamic_buffer.h"
 
 extern "C" {
 #include <sys/socket.h>
@@ -34,12 +36,21 @@ size_t get_datatype_element_size(datatype_t dtype);
 
 
 /* mpitofino client; essentially the main class to instantiate */
+struct CollectiveChannel;
+	
 class Client final
 {
+	friend CollectiveChannel;
+
 protected:
 	/* Unix domain socket for communicaton with node daemon (nd) */
 	std::filesystem::path nd_socket_path;
 	WrappedFD nd_wfd;
+
+	/* RoCE HCA context */
+	WrappedObject<ibv_device*> ib_dev_list{ibv_free_device_list};
+	ibv_device  *ib_dev{};
+	WrappedObject<ibv_context> ib_ctx{ibv_close_device};
 
 public:
 	const uint64_t client_id;
@@ -50,6 +61,8 @@ public:
 	~Client();
 
 	Client(Client&&) = delete;
+
+	void open_ib_device();
 
 	/* TODO: This should support concurrency somehow; probably through
 	   locking */
@@ -62,21 +75,38 @@ public:
 
 /* Contains some helper functions, should however not be instantiated directly
  * but rather be used by AggregationGroup. */
+class AggregationGroup;
+
 struct CollectiveChannel
 {
-	WrappedFD fd;
+	Client& client;
+	AggregationGroup& agg_group;
 
-	struct sockaddr_in local_addr{};
-	std::vector<struct sockaddr_in> fabric_addrs;
+	const size_t chunk_size = 4096;
+	dynamic_aligned_buffer ib_buf{4096, chunk_size * 2};
 
-	CollectiveChannel(
-		const struct sockaddr_in& local_addr,
-		const std::vector<struct sockaddr_in> fabric_addrs);
+	WrappedObject<ibv_pd> ib_pd{ibv_dealloc_pd};
+	WrappedObject<ibv_mr> ib_mr{ibv_dereg_mr};
+	WrappedObject<ibv_cq> ib_cq{ibv_destroy_cq};
+	WrappedObject<ibv_qp> ib_qp{ibv_destroy_qp};
+
+	uint32_t local_qp;
+	uint32_t fabric_ip;
+	uint32_t fabric_qp;
+
+	CollectiveChannel(Client& client, AggregationGroup& agg_group);
+	void finalize_qp();
+
+protected:
+	void setup_ib_pd();
+	void setup_ib_qp();
 };
 
 /* Like an MPI communicator */
 class AggregationGroup final
 {
+	friend CollectiveChannel;
+	
 protected:
 	Client& client;
 

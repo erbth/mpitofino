@@ -5,6 +5,7 @@
 #include "common/com_utils.h"
 #include "mpitofino.h"
 #include "client_lib_nd.pb.h"
+#include "ib_utils.h"
 
 extern "C" {
 #include <sys/types.h>
@@ -71,6 +72,9 @@ Client::Client(uint64_t client_id)
 {
 	GOOGLE_PROTOBUF_VERIFY_VERSION;
 
+	/* Open RoCE device */
+	open_ib_device();
+
 	/* Determine path of socket of node daemon, and connect */
 	vector<fs::path> socket_cand;
 	socket_cand.push_back("/run/mpitofino-sd");
@@ -116,18 +120,153 @@ Client::~Client()
 }
 
 
-CollectiveChannel::CollectiveChannel(
-		const struct sockaddr_in& local_addr,
-		const std::vector<struct sockaddr_in> fabric_addrs)
-	:
-		local_addr(local_addr), fabric_addrs(fabric_addrs)
+void Client::open_ib_device()
 {
-	fd.set_errno(socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0));
+	ib_dev_list = ibv_get_device_list(nullptr);
+	if (!ib_dev_list)
+		throw runtime_error("Failed ot get IB devices");
 
-	/* Bind socket */
-	check_syscall(
-			::bind(fd.get_fd(), (const struct sockaddr*) &local_addr, sizeof(local_addr)),
-			"bind collective channel socket");
+	/* Choose device */
+	if (*ib_dev_list.get())
+		ib_dev = *ib_dev_list.get();
+
+	printf("Available IB devices:\n");
+	for (auto ptr = ib_dev_list.get(); *ptr; ptr++)
+	{
+		printf("  %d: %s (guid: %s)%s\n",
+			   ibv_get_device_index(*ptr),
+			   ibv_get_device_name(*ptr),
+			   format_ib_guid(ibv_get_device_guid(*ptr)).c_str(),
+			   ib_dev == *ptr ? " <-- chosen" : "");
+	}
+
+	if (!ib_dev)
+		throw runtime_error("No suitable IB device found\n");
+
+	printf("\n");
+
+	/* Open device */
+	ib_ctx = ibv_open_device(ib_dev);
+}
+
+
+CollectiveChannel::CollectiveChannel(
+		Client& client, AggregationGroup& agg_group)
+	:
+		client(client), agg_group(agg_group)
+{
+	setup_ib_pd();
+	setup_ib_qp();
+}
+
+
+void CollectiveChannel::setup_ib_pd()
+{
+	ib_pd = ibv_alloc_pd(client.ib_ctx.get());
+	if (!ib_pd)
+		throw runtime_error("Failed to allocate IB PD");
+
+	ib_mr = ibv_reg_mr(ib_pd.get(), ib_buf.ptr(), ib_buf.size(), 0);
+	if (!ib_mr)
+		throw runtime_error("Failed to register buffer at IB PD");
+}
+
+
+void CollectiveChannel::setup_ib_qp()
+{
+	/* Create CQ */
+	ib_cq = ibv_create_cq(client.ib_ctx.get(), 2, nullptr, nullptr, 0);
+	if (!ib_cq)
+		throw runtime_error("Failed to create IB CQ");
+
+	/* Create QP */
+	ibv_qp_init_attr qp_init_attr = {
+		.send_cq = ib_cq.get(),
+		.recv_cq = ib_cq.get(),
+		.cap = {
+			.max_send_wr = 1,
+			.max_recv_wr = 1,
+			.max_send_sge = 1,
+			.max_recv_sge = 1
+		},
+		.qp_type = IBV_QPT_RC
+	};
+
+	ib_qp = ibv_create_qp(ib_pd.get(), &qp_init_attr);
+	if (!ib_qp)
+		throw runtime_error("Failed to create IB QP");
+
+	/* QP -> Init */
+	ibv_qp_attr qp_attr = {
+		.qp_state = IBV_QPS_INIT,
+		.qp_access_flags = 0,
+		.pkey_index = 0,
+		.port_num = 1
+	};
+
+	auto ret = ibv_modify_qp(
+		ib_qp.get(),
+		&qp_attr,
+		IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT |
+		IBV_QP_ACCESS_FLAGS);
+
+	if (ret)
+		throw runtime_error("Failed to set IB QP to state Init: " + to_string(ret));
+}
+
+
+void CollectiveChannel::finalize_qp()
+{
+	/* QP -> RTR */
+	ibv_qp_attr qp_attr{};
+	
+	qp_attr.qp_state = IBV_QPS_RTR;
+
+	qp_attr.ah_attr.is_global = 1;
+	qp_attr.ah_attr.sl = 0;
+	qp_attr.ah_attr.src_path_bits = 0;
+	qp_attr.ah_attr.port_num = 1;
+	qp_attr.ah_attr.grh.hop_limit = 1;
+	qp_attr.ah_attr.grh.sgid_index = 1;  // TODO discover
+
+	auto gid_ptr = (uint32_t*) &qp_attr.ah_attr.grh.dgid;
+	gid_ptr[3] = htobe32(fabric_ip);
+	gid_ptr[2] = htobe32(0xffffU);
+
+	qp_attr.path_mtu = IBV_MTU_256;
+	qp_attr.dest_qp_num = fabric_qp;
+	qp_attr.rq_psn = 0;
+	qp_attr.max_dest_rd_atomic = 1;
+	qp_attr.min_rnr_timer = 12;
+
+	auto ret = ibv_modify_qp(
+		ib_qp.get(),
+		&qp_attr,
+		IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU |
+		IBV_QP_DEST_QPN | IBV_QP_RQ_PSN |
+		IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER);
+
+	if (ret)
+		throw runtime_error("Failed to set IB QP to state RTR: " + to_string(ret));
+
+	/* QP -> RTS */
+	qp_attr.qp_state = IBV_QPS_RTS;
+
+	qp_attr.sq_psn = 0;
+	qp_attr.max_rd_atomic = 1;
+	qp_attr.retry_cnt = 0;
+	qp_attr.rnr_retry = 0;
+	qp_attr.timeout = 0;
+
+	ret = ibv_modify_qp(
+		ib_qp.get(),
+		&qp_attr,
+		IBV_QP_STATE | IBV_QP_SQ_PSN |
+		IBV_QP_MAX_QP_RD_ATOMIC | IBV_QP_RETRY_CNT |
+		IBV_QP_RNR_RETRY | IBV_QP_TIMEOUT);
+
+	if (ret)
+		throw runtime_error("Failed to set IB QP to state RTR: " + to_string(ret));
 }
 
 
@@ -152,41 +291,43 @@ CollectiveChannel* AggregationGroup::get_channel(tag_t tag)
 			return &(i->second);
 	}
 
+	/* Create collective channel s.t. qp id is populated */
+	auto ch = &channels.try_emplace(tag, client, *this).first->second;
 
-	/* Request a collective channel from the node daemon */
-	ClientRequest req;
-	auto msg = req.mutable_get_channel();
+	try
+	{
+		/* Request a collective channel from the node daemon */
+		ClientRequest req;
+		auto msg = req.mutable_get_channel();
 
-	for (auto id : client_ids)
-		msg->add_agg_group_client_ids(id);
+		for (auto id : client_ids)
+			msg->add_agg_group_client_ids(id);
 
-	msg->set_client_id(client.client_id);
+		msg->set_client_id(client.client_id);
 
-	msg->set_type(ChannelType::ALLREDUCE_INT32);
-	msg->set_tag(tag);
-	send_protobuf_message_simple_dgram(client.get_nd_fd(), req);
+		printf("local qp num: %u\n", (unsigned) ib_qp->qp_num);
 
-
-	/* Parse response */
-	auto reply = recv_protobuf_message_simple_dgram<GetChannelResponse>(client.get_nd_fd());
-
-	struct sockaddr_in local_addr = {
-		.sin_family = AF_INET,
-		.sin_port = htons(reply.local_port())
-	};
-	local_addr.sin_addr.s_addr = reply.local_ip();
-
-	vector<struct sockaddr_in> fabric_addrs;
-	struct sockaddr_in addr = {
-		.sin_family = AF_INET,
-		.sin_port = htons(reply.fabric_port())
-	};
-	addr.sin_addr.s_addr = reply.fabric_ip();
-	fabric_addrs.push_back(addr);
+		msg->set_type(ChannelType::ALLREDUCE_INT32);
+		msg->set_tag(tag);
+		msg->set_local_qp(ib_qp->qp_num);
+		send_protobuf_message_simple_dgram(client.get_nd_fd(), req);
 
 
-	/* Create collective channel */
-	return &channels.try_emplace(tag, local_addr, fabric_addrs).first->second;
+		/* Parse response */
+		auto reply = recv_protobuf_message_simple_dgram<GetChannelResponse>(client.get_nd_fd());
+
+		ch->fabric_ip = reply.fabric_ip();
+		ch->fabric_qp = reply.fabric_qp();
+
+		ch->finalize_qp();
+
+		return ch;
+	}
+	catch (...)
+	{
+		channels.erase(channels.find(tag));
+		throw;
+	}
 }
 
 
@@ -198,46 +339,46 @@ void AggregationGroup::allreduce(
 	auto ch = get_channel(tag);
 
 	/* Exchange data */
-	size_t size = count * get_datatype_element_size(dtype);
-	const size_t block_size = 256;
+	//size_t size = count * get_datatype_element_size(dtype);
+	//const size_t block_size = 256;
 
-	uint8_t buf[block_size];
-	memset(buf, 0, block_size);
+	//uint8_t buf[block_size];
+	//memset(buf, 0, block_size);
 
-	for (size_t i = 0; i < size; i += block_size)
-	{
-		auto to_send = min(block_size, size - i);
-		convert_endianess((const uint8_t*) sbuf + i, buf, to_send, dtype);
+	//for (size_t i = 0; i < size; i += block_size)
+	//{
+	//	auto to_send = min(block_size, size - i);
+	//	convert_endianess((const uint8_t*) sbuf + i, buf, to_send, dtype);
 
-		/* Send block */
-		auto& addr = ch->fabric_addrs.front();
-		
-		if (sendto(ch->fd.get_fd(), buf, block_size, 0,
-					(const struct sockaddr*) &addr, sizeof(addr))
-				!= (ssize_t) block_size)
-		{
-			throw system_error(errno, generic_category(),
-					"sendto(collective channel)");
-		}
+	//	/* Send block */
+	//	auto& addr = ch->fabric_addrs.front();
+	//	
+	//	if (sendto(ch->fd.get_fd(), buf, block_size, 0,
+	//				(const struct sockaddr*) &addr, sizeof(addr))
+	//			!= (ssize_t) block_size)
+	//	{
+	//		throw system_error(errno, generic_category(),
+	//				"sendto(collective channel)");
+	//	}
 
-		//printf("sent\n");
+	//	//printf("sent\n");
 
 
-		/* Receive block */
-		struct sockaddr_in recv_addr{};
-		socklen_t recv_addr_len = sizeof(recv_addr);
+	//	/* Receive block */
+	//	struct sockaddr_in recv_addr{};
+	//	socklen_t recv_addr_len = sizeof(recv_addr);
 
-		auto ret = recvfrom(ch->fd.get_fd(), buf, block_size, 0,
-				(struct sockaddr*) &recv_addr, &recv_addr_len);
+	//	auto ret = recvfrom(ch->fd.get_fd(), buf, block_size, 0,
+	//			(struct sockaddr*) &recv_addr, &recv_addr_len);
 
-		if (ret != block_size)
-			throw system_error(errno, generic_category(),
-					"recvfrom(collective channel)");
+	//	if (ret != block_size)
+	//		throw system_error(errno, generic_category(),
+	//				"recvfrom(collective channel)");
 
-		//printf("received\n");
+	//	//printf("received\n");
 
-		convert_endianess(buf, (uint8_t*) dbuf + i, to_send, dtype);
-	}
+	//	convert_endianess(buf, (uint8_t*) dbuf + i, to_send, dtype);
+	//}
 }
 
 

@@ -1,5 +1,6 @@
 add_library(mpitofino_int
 	mpitofino.cc
+	ib_utils.cc
 	"${CMAKE_CURRENT_BINARY_DIR}/proto_out/client_lib_nd.pb.cc"
 	"${CMAKE_CURRENT_BINARY_DIR}/proto_out/common.pb.cc"
 )
@@ -25,12 +26,18 @@ target_include_directories(mpitofino_int PRIVATE
 	"${CMAKE_CURRENT_BINARY_DIR}/proto_out/"
 )
 
+target_include_directories(mpitofino_int PUBLIC
+	${LIBIBVERBS_INCLUDE_DIRS}
+)
+
 target_link_directories(mpitofino_int PUBLIC
 	${PROTOBUF_LIBRARY_DIRS}
+	${LIBIBVERBS_LIBRARY_DIRS}
 )
 
 target_link_libraries(mpitofino_int PUBLIC
 	${PROTOBUF_LIBRARIES}
+	${LIBIBVERBS_LIBRARIES}
 )
 
 set_target_properties(mpitofino_int PROPERTIES

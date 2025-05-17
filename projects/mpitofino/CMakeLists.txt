@@ -27,6 +27,10 @@ if (WITH_SD)
 		HINTS "$ENV{SDE_INSTALL}/lib")
 endif()
 
+if (WITH_CLIENT_LIB)
+	pkg_check_modules(LIBIBVERBS REQUIRED libibverbs)
+endif()
+
 pkg_check_modules(PROTOBUF REQUIRED protobuf)
 
 # This allows for including files like `#include "common/..."'
