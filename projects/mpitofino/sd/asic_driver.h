@@ -53,6 +53,7 @@ protected:
 	const bfrt::BfRtTable* collectives_check_complete = nullptr;
 	const bfrt::BfRtTable* collectives_choose_action[32]{};
 	const bfrt::BfRtTable* collectives_output_address = nullptr;
+	const bfrt::BfRtTable* roce_ack_reflector = nullptr;
 
 	bf_status_t eth_switch_learn_cb(
 			const bf_rt_target_t bf_rt_tgt,

@@ -78,7 +78,20 @@ parser IngressParser(
 		pkt.extract(hdr.udp);
 
 		transition select(hdr.udp.dst_port) {
-			0x4000 &&& 0xc000 : parse_aggregate;
+			4791 : parse_roce;
+			default : accept;
+		}
+	}
+
+	state parse_roce {
+		pkt.extract(hdr.roce);
+
+		/* NOTE: IB ACK packets will be 28 octets long in UDP. This is
+		bad logic, but the match registers of the parser appear to be
+		exhausted already... */
+		transition select(hdr.udp.length) {
+			28 : accept;
+			280 : parse_aggregate;
 			default : accept;
 		}
 	}
@@ -112,6 +125,43 @@ control Ingress(
 {
 	/* Collectives module */
 	Collectives() collectives;
+
+
+	action roce_ack_reflect(bit<24> dst_qp)
+	{
+		bit<48> tmp_mac;
+		bit<32> tmp_ip;
+		
+		tmp_mac = hdr.ethernet.src_addr;
+		hdr.ethernet.src_addr = hdr.ethernet.dst_addr;
+		hdr.ethernet.dst_addr = tmp_mac;
+
+		tmp_ip = hdr.ipv4.src_addr;
+		hdr.ipv4.src_addr = hdr.ipv4.dst_addr;
+		hdr.ipv4.dst_addr = tmp_ip;
+
+		hdr.udp.src_port = 4791;
+
+		hdr.roce.dst_qp = dst_qp;
+
+		ig_tm_md.bypass_egress = 1;
+		ig_tm_md.ucast_egress_port = meta.ingress_port;
+	}
+	
+	table roce_ack_reflector {
+		key = {
+			hdr.ipv4.src_addr : exact;
+			hdr.roce.dst_qp : exact;
+		}
+
+		actions = {
+			roce_ack_reflect;
+			NoAction;
+		}
+		default_action = NoAction;
+
+		size = 1024;
+	}
 
 
 	/* Ethernet Switch (to be factured out into a different submodule if
@@ -181,9 +231,16 @@ control Ingress(
 			switching_table_src.apply();
 			switching_table.apply();
 
-			if (meta.is_coll == 1 && hdr.udp.isValid()) {
+			if (meta.is_coll == 1 && hdr.aggregate.isValid())
+			{
 				collectives.apply(hdr, meta, ig_intr_md, ig_dprsr_md, ig_tm_md);
-			} else if (meta.is_coll == 1)
+			}
+			else if (meta.is_coll == 1 && hdr.roce.isValid() && hdr.roce.opcode == 17)
+			{
+				/* ACK */
+				roce_ack_reflector.apply();
+			}
+			else if (meta.is_coll == 1)
 			{
 				/* Forward to CPU to handle e.g. ICMP */
 				ig_tm_md.ucast_egress_port = 64;
@@ -241,29 +298,17 @@ parser EgressParser(
 		 * headers through the TM for mpitofino-traffic, but only a small bridge
 		 * header. */
 
-		transition parse_ethernet;
+		transition select(meta.bridge_header.agg_unit) {
+			65535 : accept;
+			default: parse_aggregate;
+		}
 	}
 
-	state parse_ethernet {
+	state parse_aggregate {
 		pkt.extract(hdr.ethernet);
-
-		transition select(hdr.ethernet.ether_type) {
-			ether_type_t.IPV4 : parse_ipv4;
-			default : accept;
-		}
-	}
-
-	state parse_ipv4 {
 		pkt.extract(hdr.ipv4);
-
-		transition select(hdr.ipv4.protocol) {
-			ipv4_protocol_t.UDP : parse_udp;
-			default : accept;
-		}
-	}
-
-	state parse_udp {
 		pkt.extract(hdr.udp);
+		pkt.extract(hdr.roce);
 
 		transition accept;
 	}

@@ -165,7 +165,7 @@ void Agent::on_client_get_channel(Client* client, const proto::ctrl_sd::GetChann
 
 		c.tag = msg.tag();
 		c.fabric_ip = st_repo.get_collectives_module_ip_addr();
-		c.fabric_port = st_repo.get_free_coll_port();
+		c.fabric_qp_common = st_repo.get_free_coll_qp_common();
 		c.fabric_mac = st_repo.get_collectives_module_mac_addr();
 
 		c.agg_unit = st_repo.get_free_agg_unit();
@@ -193,16 +193,20 @@ void Agent::on_client_get_channel(Client* client, const proto::ctrl_sd::GetChann
 	client->channels.insert(ch->tag);
 
 	/* Update client parameters */
-	auto client_ip = msg.client_ip();
+	auto _client_ip = msg.client_ip();
 	auto client_mac = msg.client_mac();
 
 	if (msg.switch_port() < 0 || msg.switch_port() >= 128*4)
 		throw runtime_error("Switch port received from client out of range");
 
+	auto client_ip = *reinterpret_cast<IPv4Addr*>(&_client_ip);
+	auto fabric_qp = get_next_fabric_qp(ch, client_ip);
+
 	st_repo.update_channel_participant(
 		msg.tag(), msg.client_id(),
-		*reinterpret_cast<IPv4Addr*>(&client_ip), msg.client_port(),
-		*reinterpret_cast<MacAddr*>(&client_mac), msg.switch_port());
+		client_ip, msg.client_qp(),
+		*reinterpret_cast<MacAddr*>(&client_mac), msg.switch_port(),
+		fabric_qp);
 
 	/* Return channel parameters. Note that the ASIC has already been
 	updated synchronously during the st_repo calls above. */
@@ -210,7 +214,7 @@ void Agent::on_client_get_channel(Client* client, const proto::ctrl_sd::GetChann
 	resp.set_client_id(msg.client_id());
 	resp.set_tag(ch->tag);
 	resp.set_fabric_ip(*reinterpret_cast<const uint32_t*>(&ch->fabric_ip));
-	resp.set_fabric_port(ch->fabric_port);
+	resp.set_fabric_qp(fabric_qp);
 
 	/* Hold reply until all clients are known s.t. the ASIC has been
 	fully configured to handle all incoming datagrams correctly
@@ -273,6 +277,25 @@ void Agent::check_remove_channels(const set<uint64_t>& channels)
 	   IMPROVE: use an index instead of O(n**2) search */
 	for (auto ch_tag : channels)
 		check_remove_channel(ch_tag);
+}
+
+
+uint32_t Agent::get_next_fabric_qp(const CollectiveChannel* ch, IPv4Addr client_ip)
+{
+	/* IMPROVE: do not rebuild this map on every invocation */
+	map<IPv4Addr, uint8_t> cnts;
+
+	/* Count occurances of IPs */
+	for (auto& [c,p] : ch->participants)
+	{
+		if (p.ip.is_0000())
+			continue;
+
+		cnts.insert({p.ip, 0}).first->second++;
+	}
+
+	auto i = cnts.find(client_ip);
+	return ((uint32_t) ch->fabric_qp_common << 8) | (i != cnts.end() ? i->second : 0);
 }
 
 

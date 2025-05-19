@@ -16,6 +16,7 @@ struct my_ingress_headers_t {
 	ethernet_h	ethernet;
 	ipv4_h ipv4;
 	udp_h udp;
+	roce_h roce;
 	aggregate_h aggregate;
 }
 
@@ -39,6 +40,7 @@ struct my_egress_headers_t {
 	ethernet_h	ethernet;
 	ipv4_h ipv4;
 	udp_h udp;
+	roce_h roce;
 }
 
 struct my_egress_metadata_t {

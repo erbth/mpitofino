@@ -100,8 +100,8 @@ void StateRepository::add_channel(const CollectiveChannel& channel)
 }
 
 void StateRepository::update_channel_participant(
-	uint64_t tag, uint64_t client_id, IPv4Addr ip, uint16_t port,
-	MacAddr mac, uint16_t switch_port)
+	uint64_t tag, uint64_t client_id, IPv4Addr ip, uint32_t local_qp,
+	MacAddr mac, uint16_t switch_port, uint32_t fabric_qp)
 {
 	auto i = channels.find(tag);
 	if (i == channels.end())
@@ -115,13 +115,14 @@ void StateRepository::update_channel_participant(
 
 	auto& p = j->second;
 
-	if (p.ip != ip || p.port != port || p.mac != mac ||
-		p.switch_port != switch_port)
+	if (p.ip != ip || p.local_qp != local_qp || p.mac != mac ||
+		p.switch_port != switch_port || p.fabric_qp != fabric_qp)
 	{
 		p.ip = ip;
-		p.port = port;
+		p.local_qp = local_qp;
 		p.mac = mac;
 		p.switch_port = switch_port;
+		p.fabric_qp = fabric_qp;
 
 		notify_subscribers(subscribers_channels);
 	}
@@ -139,24 +140,24 @@ void StateRepository::remove_channel(uint64_t tag)
 }
 
 
-uint16_t StateRepository::get_free_coll_port()
+uint16_t StateRepository::get_free_coll_qp_common()
 {
 	int cnt_wraps = 0;
 	
 	while (cnt_wraps < 2)
 	{
-		if (next_coll_port < 0x4000 || next_coll_port >= 0x8000)
+		if (next_coll_qp_common < 1 || next_coll_qp_common > 0xffff)
 		{
-			next_coll_port = 0x4000;
+			next_coll_qp_common = 1;
 			cnt_wraps++;
 		}
 
-		auto port = next_coll_port++;
+		auto qp_common = next_coll_qp_common++;
 
 		bool taken = false;
 		for (auto& [t,c] : channels)
 		{
-			if (c.fabric_port == port)
+			if (c.fabric_qp_common == qp_common)
 			{
 				taken = true;
 				break;
@@ -164,10 +165,10 @@ uint16_t StateRepository::get_free_coll_port()
 		}
 
 		if (!taken)
-			return port;
+			return qp_common;
 	}
 
-	throw runtime_error("No free fabric port for collectives");
+	throw runtime_error("No free fabric QP num common part for collectives");
 }
 
 uint16_t StateRepository::get_free_agg_unit()

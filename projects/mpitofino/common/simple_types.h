@@ -120,6 +120,12 @@ struct IPv4Addr
 		return !(*this == o);
 	}
 
+	inline bool operator<(const IPv4Addr& o) const
+	{
+		return *reinterpret_cast<const uint32_t*>(addr) <
+			*reinterpret_cast<const uint32_t*>(o.addr);
+	}
+
 	inline bool is_0000() const
 	{
 		return addr[0] == 0 && addr[1] == 0 && addr[2] == 0 && addr[3] == 0;

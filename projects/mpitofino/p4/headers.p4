@@ -14,6 +14,10 @@ enum bit<8> ipv4_protocol_t {
 	UDP  = 0x11
 }
 
+typedef bit<24> ib_qp_t;
+typedef bit<24> ib_psn_t;
+
+
 /* 'Offloading' packets to/from the control plane */
 header cpoffload_h {
 	bit<16> port_id;
@@ -57,6 +61,25 @@ header udp_h {
 	bit<16> dst_port;
 	bit<16> length;
 	bit<16> checksum;
+}
+
+/* IB BTH */
+header roce_h {
+	bit<8>   opcode;
+	bit<1>   se;
+	bit<1>   migreq;
+	bit<2>   pad_cnt;
+	bit<4>   version;
+	bit<16>  partition_key;
+	bit<8>   reserved;
+	ib_qp_t  dst_qp;
+	bit<1>   ack_req;
+	bit<7>   reserved2;
+	ib_psn_t psn;
+}
+
+header roce_checksum_h {
+	bit<32> checksum;
 }
 
 header aggregate_h {

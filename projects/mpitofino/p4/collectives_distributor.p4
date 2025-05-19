@@ -9,7 +9,7 @@ control CollectivesDistributor(
 	action output_address_set(
 		mac_addr_t src_mac, mac_addr_t dst_mac,
 		ipv4_addr_t src_ip, ipv4_addr_t dst_ip,
-		bit<16> src_port, bit<16> dst_port)
+		bit<24> dst_qp)
 	{
 		hdr.ethernet.src_addr = src_mac;
 		hdr.ethernet.dst_addr = dst_mac;
@@ -17,11 +17,13 @@ control CollectivesDistributor(
 		hdr.ipv4.src_addr = src_ip;
 		hdr.ipv4.dst_addr = dst_ip;
 
-		hdr.udp.src_port = src_port;
-		hdr.udp.dst_port = dst_port;
+		hdr.udp.src_port = 4791;
+		hdr.udp.dst_port = 4791;
 
 		// Disable checksum
 		hdr.udp.checksum = 0;
+
+		hdr.roce.dst_qp = dst_qp;
 	}
 
 	table output_address {
@@ -37,15 +39,12 @@ control CollectivesDistributor(
 		default_action = NoAction;
 
 		size = 1024;
-
-		//const entries = {
-		//	(1, 1) : output_address_set(0x028000000400, 0x525500000015, 0x0a0a8000, 0x0a0a0001, 0x6000, 0x4000);
-		//	(1, 2) : output_address_set(0x028000000400, 0x525500000014, 0x0a0a8000, 0x0a0a0002, 0x6000, 0x4000);
-		//}
 	}
 
 	apply {
 		/* Fill source and destination addresses on result packet output */
 		output_address.apply();
+
+		/* Calculate checksum */
 	}
 }

@@ -1,6 +1,7 @@
 #ifndef __DISTRIBUTED_CONTROL_PLANE_AGENT_H
 #define __DISTRIBUTED_CONTROL_PLANE_AGENT_H
 
+#include <cstdint>
 #include <list>
 #include <vector>
 #include <map>
@@ -53,6 +54,9 @@ protected:
 
 	void check_remove_channel(uint64_t tag);
 	void check_remove_channels(const std::set<uint64_t>& channels);
+
+
+	uint32_t get_next_fabric_qp(const CollectiveChannel* ch, IPv4Addr client_ip);
 
 
 public:

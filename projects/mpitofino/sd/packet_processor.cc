@@ -347,13 +347,14 @@ void PacketProcessor::on_discovery_protocol_timer()
 	   clients, which complicates the test setup more than required. */
 
 	char buf[1024];
-	memset(buf, 0, sizeof(buf));
 
 	/* TODO: Query state_repo for active ports and use those */
 	for (int i = 0; i < 4; i++)
 	{
 		for (int j = 0; j < (i == 3 ? 14 : 16); j++)
 		{
+			memset(buf, 0, sizeof(buf));
+
 			int port_id = i*128 + j*4;
 			char* ptr = buf;
 

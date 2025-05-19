@@ -19,7 +19,7 @@ struct CollectiveChannel final
 {
 	uint64_t tag{};
 	IPv4Addr fabric_ip;
-	uint16_t fabric_port{};
+	uint16_t fabric_qp_common;
 	MacAddr fabric_mac;
 
 	uint16_t agg_unit{};
@@ -28,7 +28,11 @@ struct CollectiveChannel final
 	{
 		uint64_t client_id{};
 		IPv4Addr ip;
-		uint16_t port{};
+		uint32_t local_qp{};
+
+		/* Fabric QP is composed of (bit<16> id, bit<8> per-node id) s.t.
+		   agg units can be matched on the first id for recirculated packets */
+		uint32_t fabric_qp{};
 		MacAddr mac;
 		uint16_t switch_port{};
 	};
@@ -62,7 +66,7 @@ protected:
 	/* tag -> channel */
 	std::map<uint64_t, CollectiveChannel> channels;
 
-	uint16_t next_coll_port{};
+	uint32_t next_coll_qp{};
 
 	subscriber_list_t subscribers_channels;
 
@@ -90,12 +94,14 @@ public:
 	/* Does only add the channel, but not fill any fields */
 	void add_channel(const CollectiveChannel& channel);
 	void update_channel_participant(
-		uint64_t tag, uint64_t client_id, IPv4Addr ip, uint16_t port,
-		MacAddr mac, uint16_t switch_port);
+		uint64_t tag, uint64_t client_id, IPv4Addr ip, uint32_t local_qp,
+		MacAddr mac, uint16_t switch_port, uint32_t fabric_qp);
 
 	void remove_channel(uint64_t tag);
 
-	uint16_t get_free_coll_port();
+	uint16_t next_coll_qp_common = 0;
+	uint16_t get_free_coll_qp_common();
+
 	uint16_t get_free_agg_unit();
 
 	/* publish/subscribe */

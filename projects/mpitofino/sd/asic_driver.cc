@@ -78,6 +78,7 @@ void ASICDriver::find_tables()
 	RES_TBL("Ingress.collectives.unit_selector", collectives_unit_selector);
 	RES_TBL("Ingress.collectives.check_complete", collectives_check_complete);
 	RES_TBL("Egress.collectives_distributor.output_address", collectives_output_address);
+	RES_TBL("Ingress.roce_ack_reflector", roce_ack_reflector);
 
 	RES_TBL("Ingress.collectives.agg00.choose_action", collectives_choose_action[0]);
 	RES_TBL("Ingress.collectives.agg01.choose_action", collectives_choose_action[1]);
@@ -116,6 +117,7 @@ void ASICDriver::find_tables()
 	table_set_asym(*collectives_unit_selector, *session, dev_tgt, true);
 	table_set_asym(*collectives_check_complete, *session, dev_tgt, true);
 	table_set_asym(*collectives_output_address, *session, dev_tgt, true);
+	table_set_asym(*roce_ack_reflector, *session, dev_tgt, true);
 }
 
 void ASICDriver::initial_setup()
@@ -516,10 +518,9 @@ void ASICDriver::on_st_repo_channels()
 						reinterpret_cast<const uint8_t*>(&part.ip), ip_mask,
 						sizeof(part.ip)),
 					{"hdr.ipv4.dst_addr",
-					reinterpret_cast<const uint8_t*>(&rc->fabric_ip), sizeof(rc->fabric_ip)},
+					 reinterpret_cast<const uint8_t*>(&rc->fabric_ip), sizeof(rc->fabric_ip)},
 					table_field_desc_t<uint64_t>::create_ternary(
-						"hdr.udp.src_port", part.port, 0xffff),
-					{"hdr.udp.dst_port", rc->fabric_port},
+						"hdr.roce.dst_qp", part.fabric_qp, 0xffffff),
 					table_field_desc_t<uint64_t>::create_ternary("meta.ingress_port", 0, 0)),
 				*table_create_data_action<uint64_t, uint64_t, uint64_t>(
 					collectives_unit_selector, "Ingress.collectives.select_agg_unit",
@@ -537,7 +538,7 @@ void ASICDriver::on_st_repo_channels()
 					{"meta.bridge_header.agg_unit", rc->agg_unit},
 					{"eg_intr_md.egress_rid", pos}),
 				*table_create_data_action<const uint8_t*, const uint8_t*,
-						const uint8_t*, const uint8_t*, uint64_t, uint64_t>(
+						const uint8_t*, const uint8_t*, uint64_t>(
 					collectives_output_address,
 					"Egress.collectives_distributor.output_address_set",
 					{"src_mac",
@@ -552,9 +553,24 @@ void ASICDriver::on_st_repo_channels()
 					{"dst_ip",
 					reinterpret_cast<const uint8_t*>(&part.ip),
 					sizeof(part.ip)},
-					{"src_port", rc->fabric_port},
-					{"dst_port", part.port})),
+					{"dst_qp", part.local_qp})),
 			"Failed to update CollectivesDistributor.output_address table");
+
+
+			/* RoCE/IB ACK reflector */
+			check_bf_status(table_add_or_mod(
+				*roce_ack_reflector, *session, pipe_tgt,
+				*table_create_key<const uint8_t*, uint64_t>(
+					roce_ack_reflector,
+					{"hdr.ipv4.src_addr",
+					 reinterpret_cast<const uint8_t*>(&part.ip),
+					 sizeof(part.ip)},
+					{"hdr.roce.dst_qp", part.fabric_qp}),
+				*table_create_data_action<uint64_t>(
+					roce_ack_reflector,
+					"Ingress.roce_ack_reflect",
+					{"dst_qp", part.local_qp})),
+			"Failed to update roce_ack_reflector table");
 
 
 			/* Update worker bitmap */
@@ -604,8 +620,7 @@ void ASICDriver::on_st_repo_channels()
 					{"hdr.ipv4.dst_addr",
 					 reinterpret_cast<const uint8_t*>(&rc->fabric_ip), sizeof(rc->fabric_ip)},
 					table_field_desc_t<uint64_t>::create_ternary(
-						"hdr.udp.src_port", 0, 0),
-					{"hdr.udp.dst_port", rc->fabric_port},
+						"hdr.roce.dst_qp", (uint32_t) rc->fabric_qp_common << 8, 0xffff00),
 					table_field_desc_t<uint64_t>::create_ternary(
 						"meta.ingress_port", 3*128 + 56 + pipe*4, 0x1ff)),
 				*table_create_data_action<uint64_t, uint64_t, uint64_t>(
@@ -647,8 +662,7 @@ void ASICDriver::on_st_repo_channels()
 					{"hdr.ipv4.dst_addr",
 					 reinterpret_cast<const uint8_t*>(&rc->fabric_ip), sizeof(rc->fabric_ip)},
 					table_field_desc_t<uint64_t>::create_ternary(
-						"hdr.udp.src_port", 0, 0),
-					{"hdr.udp.dst_port", rc->fabric_port},
+						"hdr.roce.dst_qp", (uint32_t) rc->fabric_qp_common, 0xffff00),
 					table_field_desc_t<uint64_t>::create_ternary(
 						"meta.ingress_port", 3*128 + 68, 0x1ff)),
 				*table_create_data_action<uint64_t, uint64_t, uint64_t>(
@@ -675,7 +689,8 @@ void ASICDriver::on_st_repo_channels()
 				*collectives_check_complete, *session, pipe_tgt,
 				*table_create_key<uint64_t, uint64_t, uint64_t, bool>(
 					collectives_check_complete,
-					{"meta.agg_unit", rc->agg_unit},
+					table_field_desc_t<uint64_t>::create_ternary(
+						"meta.agg_unit", rc->agg_unit << 4, 0xfff0),
 					table_field_desc_t<uint64_t>::create_ternary(
 						"meta.node_bitmap.low", full_bitmap_low[pipe], 0xffffffff),
 					table_field_desc_t<uint64_t>::create_ternary(
@@ -711,7 +726,8 @@ void ASICDriver::on_st_repo_channels()
 				*collectives_check_complete, *session, pipe_tgt,
 				*table_create_key<uint64_t, uint64_t, uint64_t, bool>(
 					collectives_check_complete,
-					{"meta.agg_unit", rc->agg_unit},
+					table_field_desc_t<uint64_t>::create_ternary(
+						"meta.agg_unit", rc->agg_unit << 4, 0xfff0),
 					table_field_desc_t<uint64_t>::create_ternary(
 						"meta.node_bitmap.low", 0, 0),
 					table_field_desc_t<uint64_t>::create_ternary(
@@ -785,7 +801,7 @@ void ASICDriver::on_st_repo_channels()
 			{
 				auto d = (*i).second;
 				bf_rt_id_t act_id{};
-				check_bf_status(d->actionIdGet(&act_id), "d->actionGetId");
+				check_bf_status(d->actionIdGet(&act_id), "d->actionIdGet");
 				if (act_id != act_id_select_agg_unit)
 					continue;
 
@@ -818,11 +834,11 @@ void ASICDriver::on_st_repo_channels()
 			{
 				auto k = (*i).first;
 
-				uint64_t agg_unit{};
-				check_bf_status(k->getValue(field_id_check_complete, &agg_unit),
-								"k->getValue");
+				uint64_t agg_unit{}, mask{};
+				check_bf_status(k->getValueandMask(field_id_check_complete, &agg_unit, &mask),
+								"k->getValueandMask");
 
-				if (agg_units_in_use.find(agg_unit) == agg_units_in_use.end())
+				if (agg_units_in_use.find(agg_unit >> 4) == agg_units_in_use.end())
 				{
 					check_bf_status(collectives_check_complete->tableEntryDel(
 										*session, pipe_tgt, *k),
@@ -852,6 +868,66 @@ void ASICDriver::on_st_repo_channels()
 				if (agg_units_in_use.find(agg_unit) == agg_units_in_use.end())
 				{
 					check_bf_status(collectives_output_address->tableEntryDel(
+										*session, pipe_tgt, *k),
+									"tableEntryDel");
+				}
+			}
+		}
+
+
+		/* roce_ack_reflector */
+		bf_rt_id_t field_id_roce_ack_ip{};
+		bf_rt_id_t field_id_roce_ack_qp{};
+		check_bf_status(
+				roce_ack_reflector->keyFieldIdGet(
+					"hdr.ipv4.src_addr", &field_id_roce_ack_ip),
+				"keyFieldIdGet");
+
+		check_bf_status(
+				roce_ack_reflector->keyFieldIdGet(
+					"hdr.roce.dst_qp", &field_id_roce_ack_qp),
+				"keyFieldIdGet");
+
+		
+		{
+			table_iterator i(*roce_ack_reflector, *session, pipe_tgt);
+			for (; i; ++i)
+			{
+				auto k = (*i).first;
+
+				IPv4Addr ip;
+				uint64_t qp;
+
+				check_bf_status(k->getValue(field_id_roce_ack_ip,
+											sizeof(ip),
+											reinterpret_cast<uint8_t*>(&ip)),
+								"k->getValue");
+
+				check_bf_status(k->getValue(field_id_roce_ack_qp,
+											&qp),
+								"k->getValue");
+
+				/* IMPROVE: Avoid nested loops; maybe use agg_units_to_clear */
+				bool keep = false;
+
+				for (auto rc : repo_channels)
+				{
+					for (auto& [ipart,part] : rc->participants)
+					{
+						if (part.ip == ip && part.fabric_qp == qp)
+						{
+							keep = true;
+							break;
+						}
+					}
+
+				}
+
+				/* TODO (in multiple places): Does the iterator work
+				with tables altered during iteration? */
+				if (!keep)
+				{
+					check_bf_status(roce_ack_reflector->tableEntryDel(
 										*session, pipe_tgt, *k),
 									"tableEntryDel");
 				}
@@ -963,66 +1039,69 @@ void ASICDriver::on_st_repo_channels()
 	}
 
 	/* clear registers */
-	for (auto i : agg_units_to_clear)
+	for (auto k : agg_units_to_clear)
 	{
-		/* Agg unit value registers */
-		for (int j = 0; j < 32; j++)
+		for (unsigned i = k << 4U; i < (k << 4U) + 16U; i++)
 		{
-			char buf[3];
-			snprintf(buf, sizeof(buf), "%02d", j);
-			buf[2] = '\0';
-			string istr(buf);
+			/* Agg unit value registers */
+			for (int j = 0; j < 32; j++)
+			{
+				char buf[3];
+				snprintf(buf, sizeof(buf), "%02d", j);
+				buf[2] = '\0';
+				string istr(buf);
 
-			const BfRtTable *tbl_values = nullptr;
+				const BfRtTable *tbl_values = nullptr;
+				check_bf_status(
+					bfrt_info->bfrtTableFromNameGet(
+						"Ingress.collectives.agg" + istr + ".values",
+						&tbl_values),
+					("Failed to resolve register table"));
+
+				check_bf_status(tbl_values->tableEntryMod(*session, dev_tgt,
+							*table_create_key<uint64_t>(tbl_values, {"$REGISTER_INDEX", i}),
+							*table_create_data<uint64_t, uint64_t>(
+								tbl_values,
+								{("Ingress.collectives.agg" + istr + ".values.low").c_str(), 0},
+								{("Ingress.collectives.agg" + istr + ".values.high").c_str(), 0}
+							)
+						),
+						"Clear values register failed");
+			}
+
+			/* State bitmaps */
+			const BfRtTable *tbl_state_low = nullptr;
 			check_bf_status(
 				bfrt_info->bfrtTableFromNameGet(
-					"Ingress.collectives.agg" + istr + ".values",
-					&tbl_values),
-				("Failed to resolve register table"));
+					"Ingress.collectives.state_bitmaps_low",
+					&tbl_state_low),
+				("Failed to resolve state bitmap low table"));
 
-			check_bf_status(tbl_values->tableEntryMod(*session, dev_tgt,
-						*table_create_key<uint64_t>(tbl_values, {"$REGISTER_INDEX", i}),
-						*table_create_data<uint64_t, uint64_t>(
-							tbl_values,
-							{("Ingress.collectives.agg" + istr + ".values.low").c_str(), 0},
-							{("Ingress.collectives.agg" + istr + ".values.high").c_str(), 0}
+			check_bf_status(tbl_state_low->tableEntryMod(*session, dev_tgt,
+						*table_create_key<uint64_t>(tbl_state_low, {"$REGISTER_INDEX", i}),
+						*table_create_data<uint64_t>(
+							tbl_state_low,
+							{"Ingress.collectives.state_bitmaps_low.f1", 0}
 						)
 					),
-					"Clear values register failed");
+					"Clear state bitmap low failed");
+
+
+			const BfRtTable *tbl_state_high = nullptr;
+			check_bf_status(
+				bfrt_info->bfrtTableFromNameGet(
+					"Ingress.collectives.state_bitmaps_high",
+					&tbl_state_high),
+				("Failed to resolve state bitmap high table"));
+
+			check_bf_status(tbl_state_high->tableEntryMod(*session, dev_tgt,
+						*table_create_key<uint64_t>(tbl_state_high, {"$REGISTER_INDEX", i}),
+						*table_create_data<uint64_t>(
+							tbl_state_high,
+							{"Ingress.collectives.state_bitmaps_high.f1", 0}
+						)
+					),
+					"Clear state bitmap high failed");
 		}
-
-		/* State bitmaps */
-		const BfRtTable *tbl_state_low = nullptr;
-		check_bf_status(
-			bfrt_info->bfrtTableFromNameGet(
-				"Ingress.collectives.state_bitmaps_low",
-				&tbl_state_low),
-			("Failed to resolve state bitmap low table"));
-
-		check_bf_status(tbl_state_low->tableEntryMod(*session, dev_tgt,
-					*table_create_key<uint64_t>(tbl_state_low, {"$REGISTER_INDEX", i}),
-					*table_create_data<uint64_t>(
-						tbl_state_low,
-						{"Ingress.collectives.state_bitmaps_low.f1", 0}
-					)
-				),
-				"Clear state bitmap low failed");
-
-
-		const BfRtTable *tbl_state_high = nullptr;
-		check_bf_status(
-			bfrt_info->bfrtTableFromNameGet(
-				"Ingress.collectives.state_bitmaps_high",
-				&tbl_state_high),
-			("Failed to resolve state bitmap high table"));
-
-		check_bf_status(tbl_state_high->tableEntryMod(*session, dev_tgt,
-					*table_create_key<uint64_t>(tbl_state_high, {"$REGISTER_INDEX", i}),
-					*table_create_data<uint64_t>(
-						tbl_state_high,
-						{"Ingress.collectives.state_bitmaps_high.f1", 0}
-					)
-				),
-				"Clear state bitmap high failed");
 	}
 }
