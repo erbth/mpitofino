@@ -81,6 +81,7 @@ int main(int argc, char** argv)
 					(long) i, (int) expected[i], (int) dbuf[i]);
 
 			match = false;
+			break;
 		}
 	}
 

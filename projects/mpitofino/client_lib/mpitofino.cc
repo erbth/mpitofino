@@ -166,7 +166,9 @@ void CollectiveChannel::setup_ib_pd()
 	if (!ib_pd)
 		throw runtime_error("Failed to allocate IB PD");
 
-	ib_mr = ibv_reg_mr(ib_pd.get(), ib_buf.ptr(), ib_buf.size(), 0);
+	ib_mr = ibv_reg_mr(ib_pd.get(), ib_buf.ptr(), ib_buf.size(),
+					   IBV_ACCESS_LOCAL_WRITE);
+
 	if (!ib_mr)
 		throw runtime_error("Failed to register buffer at IB PD");
 }
@@ -229,15 +231,16 @@ void CollectiveChannel::finalize_qp()
 	qp_attr.ah_attr.grh.hop_limit = 1;
 	qp_attr.ah_attr.grh.sgid_index = 1;  // TODO discover
 
+	/* Construct a mapped IPv4-address */
 	auto gid_ptr = (uint32_t*) &qp_attr.ah_attr.grh.dgid;
-	gid_ptr[3] = htobe32(fabric_ip);
+	gid_ptr[3] = fabric_ip;
 	gid_ptr[2] = htobe32(0xffffU);
 
 	qp_attr.path_mtu = IBV_MTU_256;
 	qp_attr.dest_qp_num = fabric_qp;
 	qp_attr.rq_psn = 0;
 	qp_attr.max_dest_rd_atomic = 1;
-	qp_attr.min_rnr_timer = 12;
+	qp_attr.min_rnr_timer = 0;
 
 	auto ret = ibv_modify_qp(
 		ib_qp.get(),
@@ -266,7 +269,7 @@ void CollectiveChannel::finalize_qp()
 		IBV_QP_RNR_RETRY | IBV_QP_TIMEOUT);
 
 	if (ret)
-		throw runtime_error("Failed to set IB QP to state RTR: " + to_string(ret));
+		throw runtime_error("Failed to set IB QP to state RTS: " + to_string(ret));
 }
 
 
@@ -305,11 +308,9 @@ CollectiveChannel* AggregationGroup::get_channel(tag_t tag)
 
 		msg->set_client_id(client.client_id);
 
-		printf("local qp num: %u\n", (unsigned) ib_qp->qp_num);
-
 		msg->set_type(ChannelType::ALLREDUCE_INT32);
 		msg->set_tag(tag);
-		msg->set_local_qp(ib_qp->qp_num);
+		msg->set_local_qp(ch->ib_qp->qp_num);
 		send_protobuf_message_simple_dgram(client.get_nd_fd(), req);
 
 
@@ -339,46 +340,114 @@ void AggregationGroup::allreduce(
 	auto ch = get_channel(tag);
 
 	/* Exchange data */
-	//size_t size = count * get_datatype_element_size(dtype);
-	//const size_t block_size = 256;
+	size_t size = count * get_datatype_element_size(dtype);
 
-	//uint8_t buf[block_size];
-	//memset(buf, 0, block_size);
+	auto send_buf = ch->ib_buf.ptr();
+	auto recv_buf = ch->ib_buf.ptr() + ch->chunk_size;
 
-	//for (size_t i = 0; i < size; i += block_size)
-	//{
-	//	auto to_send = min(block_size, size - i);
-	//	convert_endianess((const uint8_t*) sbuf + i, buf, to_send, dtype);
+	memset(send_buf, 0, ch->chunk_size);
+	memset(recv_buf, 0, ch->chunk_size);
 
-	//	/* Send block */
-	//	auto& addr = ch->fabric_addrs.front();
-	//	
-	//	if (sendto(ch->fd.get_fd(), buf, block_size, 0,
-	//				(const struct sockaddr*) &addr, sizeof(addr))
-	//			!= (ssize_t) block_size)
-	//	{
-	//		throw system_error(errno, generic_category(),
-	//				"sendto(collective channel)");
-	//	}
-
-	//	//printf("sent\n");
+	for (size_t i = 0; i < size; i += ch->chunk_size)
+	{
+		auto to_send = min(ch->chunk_size, size - i);
+		convert_endianess((const uint8_t*) sbuf + i, send_buf, to_send, dtype);
 
 
-	//	/* Receive block */
-	//	struct sockaddr_in recv_addr{};
-	//	socklen_t recv_addr_len = sizeof(recv_addr);
+		/* Post receive */
+		ibv_sge recv_sge = {
+			.addr = (uintptr_t) recv_buf,
+			.length = (uint32_t) ch->chunk_size,
+			.lkey = ch->ib_mr->lkey
+		};
 
-	//	auto ret = recvfrom(ch->fd.get_fd(), buf, block_size, 0,
-	//			(struct sockaddr*) &recv_addr, &recv_addr_len);
+		ibv_recv_wr* recv_bad_wr;
+		ibv_recv_wr recv_wr = {
+			.wr_id = 1,
+			.sg_list = &recv_sge,
+			.num_sge = 1
+		};
 
-	//	if (ret != block_size)
-	//		throw system_error(errno, generic_category(),
-	//				"recvfrom(collective channel)");
+		auto ret = ibv_post_recv(ch->ib_qp.get(), &recv_wr, &recv_bad_wr);
+		if (ret)
+			throw runtime_error("Failed to post IB receive WR: " + to_string(ret));
 
-	//	//printf("received\n");
 
-	//	convert_endianess(buf, (uint8_t*) dbuf + i, to_send, dtype);
-	//}
+		/* Post send */
+		ibv_sge send_sge = {
+			.addr = (uintptr_t) send_buf,
+			.length = (uint32_t) ch->chunk_size,
+			.lkey = ch->ib_mr->lkey
+		};
+		
+		ibv_send_wr* send_bad_wr = nullptr;
+		ibv_send_wr send_wr = {
+			.wr_id = 2,
+			.sg_list = &send_sge,
+			.num_sge = 1,
+			.opcode = IBV_WR_SEND,
+			.send_flags = IBV_SEND_SIGNALED
+		};
+		
+		ret = ibv_post_send(ch->ib_qp.get(), &send_wr, &send_bad_wr);
+		if (ret)
+			throw runtime_error("Failed to post IB send WR: " + to_string(ret));
+
+
+		/* Wait for WRs to complete */
+		int cnt_complete = 0;
+		bool send_failed = false;
+		bool recv_failed = false;
+		ibv_wc_status send_status = IBV_WC_SUCCESS;
+		ibv_wc_status recv_status = IBV_WC_SUCCESS;
+
+		while (cnt_complete < 2)
+		{
+			ibv_wc wcs[32];
+			ret = ibv_poll_cq(ch->ib_cq.get(), sizeof(wcs) / sizeof(wcs[0]), wcs);
+			if (ret < 0)
+				throw runtime_error("Failed to poll IB CQ");
+
+			for (auto i = 0; i < ret; i++)
+			{
+				auto& wc = wcs[i];
+				
+				cnt_complete++;
+
+				if (wc.wr_id == 2)
+					printf("send complete\n");
+
+				else if (wc.wr_id == 1)
+					printf("recv complete\n");
+
+				else
+					printf("unknown completion\n");
+
+				if (wc.status != IBV_WC_SUCCESS ||
+					wc.byte_len != ch->chunk_size)
+				{
+					if (wc.wr_id == 2)
+					{
+						send_status = wc.status;
+						send_failed = true;
+					}
+					else
+					{
+						recv_status = wc.status;
+						recv_failed = true;
+					}
+				}
+			}
+		}
+
+		if (recv_failed)
+			throw runtime_error("IB recv failed: " + to_string(recv_status));
+
+		if (send_failed)
+			throw runtime_error("IB send failed: " + to_string(send_status));
+
+		convert_endianess(recv_buf, (uint8_t*) dbuf + i, to_send, dtype);
+	}
 }
 
 

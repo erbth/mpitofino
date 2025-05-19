@@ -292,41 +292,6 @@ void NodeDaemon::on_client_get_channel(Client* c, const GetChannel& msg)
 }
 
 
-uint16_t NodeDaemon::get_free_coll_port()
-{
-	int cnt_wraps = 0;
-	
-	while (cnt_wraps < 2)
-	{
-		if (next_coll_port < 0x4000 || next_coll_port >= 0x8000)
-		{
-			next_coll_port = 0x4000;
-			cnt_wraps++;
-		}
-
-		auto port = next_coll_port++;
-
-		bool taken = false;
-		for (auto& c : clients)
-		{
-			for (auto& [t,ch_port] : c.channels)
-			{
-				if (ch_port == port)
-				{
-					taken = true;
-					break;
-				}
-			}
-		}
-
-		if (!taken)
-			return port;
-	}
-
-	throw runtime_error("No free local port for collectives");
-}
-
-
 void NodeDaemon::initialize_tdp()
 {
 	tdp_wfd.set_errno(socket(AF_INET, SOCK_DGRAM, 0), "socket(udp for tdp)");
