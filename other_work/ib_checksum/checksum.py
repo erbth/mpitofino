@@ -44,6 +44,9 @@ class ICRC:
     def value(self):
         output = self._acc
 
+        # binary not without negation
+        output = output ^ 0xffffffff
+
         output = \
             ((output & 0x00000001) << 7) | \
             ((output & 0x00000002) << 5) | \
@@ -80,12 +83,6 @@ class ICRC:
             ((output & 0x20000000) >> 3) | \
             ((output & 0x40000000) >> 5) | \
             ((output & 0x80000000) >> 7)
-
-        output = \
-            ((output & 0x000000ff) << 24) | \
-            ((output & 0x0000ff00) << 8)  | \
-            ((output & 0x00ff0000) >> 8)  | \
-            ((output & 0xff000000) >> 24)
 
         return output
 
