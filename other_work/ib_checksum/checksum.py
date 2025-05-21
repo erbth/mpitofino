@@ -4,6 +4,9 @@ import re
 import sys
 
 
+# See also: https://stackoverflow.com/a/23126768
+
+
 def load_packet(filename):
     data = bytearray()
     

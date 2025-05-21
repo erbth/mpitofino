@@ -18,6 +18,7 @@ struct my_ingress_headers_t {
 	udp_h udp;
 	roce_h roce;
 	aggregate_h aggregate;
+	roce_checksum_h roce_checksum;
 }
 
 struct my_ingress_metadata_t {
@@ -25,11 +26,11 @@ struct my_ingress_metadata_t {
 
 	/* S.t. the ingress port will be available in the deparser. */
 	PortId_t ingress_port;
-	bit<1> handled;  // no further processing required
 	bit<1> is_coll;  // process packet with collectives unit
 
 	bit<16> agg_unit;
 	node_bitmap_t node_bitmap;
+	bool agg_have_unit;
 	bool agg_is_clear;  // set on final recirculation before the result is sent
 
 	bridge_header_t bridge_header;
@@ -41,6 +42,7 @@ struct my_egress_headers_t {
 	ipv4_h ipv4;
 	udp_h udp;
 	roce_h roce;
+	roce_checksum_h roce_checksum;
 }
 
 struct my_egress_metadata_t {

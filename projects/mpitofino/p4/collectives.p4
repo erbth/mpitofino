@@ -138,6 +138,66 @@ control Collectives(
 	};
 
 
+	action tbl_update_bitmap_low_act() {
+		meta.node_bitmap.low = update_bitmap_low.execute((bit<12>) meta.agg_unit);
+	}
+
+	action tbl_update_bitmap_low_clear() {
+		clear_bitmap_low.execute((bit<12>) meta.agg_unit);
+	}
+	
+	table tbl_update_bitmap_low {
+		key = {
+			meta.agg_have_unit : exact;
+			meta.agg_is_clear : exact;
+		}
+
+		actions = {
+			tbl_update_bitmap_low_act;
+			tbl_update_bitmap_low_clear;
+			NoAction;
+		}
+
+		size = 2;
+		default_action = NoAction;
+
+		const entries = {
+			(true, false)     : tbl_update_bitmap_low_act;
+			(true, true)      : tbl_update_bitmap_low_clear;
+		}
+	}
+
+
+	action tbl_update_bitmap_high_act() {
+		meta.node_bitmap.high = update_bitmap_high.execute((bit<12>) meta.agg_unit);
+	}
+
+	action tbl_update_bitmap_high_clear() {
+		clear_bitmap_high.execute((bit<12>) meta.agg_unit);
+	}
+	
+	table tbl_update_bitmap_high {
+		key = {
+			meta.agg_have_unit : exact;
+			meta.agg_is_clear : exact;
+		}
+
+		actions = {
+			tbl_update_bitmap_high_act;
+			tbl_update_bitmap_high_clear;
+			NoAction;
+		}
+
+		size = 2;
+		default_action = NoAction;
+
+		const entries = {
+			(true, false)     : tbl_update_bitmap_high_act;
+			(true, true)      : tbl_update_bitmap_high_clear;
+		}
+	}
+
+
 	action check_complete_true(PortId_t recirc_port) {
 		ig_dprsr_md.drop_ctl = 0;
 
@@ -194,14 +254,14 @@ control Collectives(
 	{
 		// Setup aggregation configuration
 		ig_dprsr_md.drop_ctl = 1;
+		meta.agg_have_unit = true;
 		meta.agg_unit = agg_unit[11:0] ++ hdr.roce.psn[3:0];
 		meta.bridge_header.agg_unit = agg_unit;
 		meta.node_bitmap.low  = node_bitmap_low;
 		meta.node_bitmap.high = node_bitmap_high;
-
-		meta.handled = 1;
 	}
 
+	@stage(0)
 	table unit_selector {
 		key = {
 			hdr.ipv4.src_addr : ternary;
@@ -225,18 +285,9 @@ control Collectives(
 		 * future) sequence number */
 		unit_selector.apply();
 
-		if (meta.agg_unit != 65535 && !meta.agg_is_clear)
-		{
-			/* Track progress of aggregation at this aggregation-node (switch)
-			 * */
-			meta.node_bitmap.low = update_bitmap_low.execute((bit<12>) meta.agg_unit);
-			meta.node_bitmap.high = update_bitmap_high.execute((bit<12>) meta.agg_unit);
-		}
-		else if (meta.agg_unit != 65535)
-		{
-			clear_bitmap_low.execute((bit<12>) meta.agg_unit);
-			clear_bitmap_high.execute((bit<12>) meta.agg_unit);
-		}
+		/* Track progress of aggregation at this aggregation-node (switch) * */
+		tbl_update_bitmap_low.apply();
+		tbl_update_bitmap_high.apply();
 
 		check_complete.apply();
 

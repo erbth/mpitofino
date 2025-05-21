@@ -79,7 +79,7 @@ header roce_h {
 }
 
 header roce_checksum_h {
-	bit<32> checksum;
+	bit<32> icrc;
 }
 
 header aggregate_h {

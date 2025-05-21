@@ -29,12 +29,12 @@ parser IngressParser(
 	}
 
 	state meta_init {
-		meta.handled = 0;
 		meta.ingress_port = ig_intr_md.ingress_port;
 		meta.is_coll = 0;
 
 		/* Collectives module's state */
 		meta.agg_unit = 65535;
+		meta.agg_have_unit = false;
 		meta.node_bitmap = {0, 0};
 		meta.agg_is_clear = false;
 
@@ -98,6 +98,7 @@ parser IngressParser(
 
 	state parse_aggregate {
 		pkt.extract(hdr.aggregate);
+		pkt.extract(hdr.roce_checksum);
 
 		transition select(ig_intr_md.ingress_port) {
 			68 : parse_aggregate_recirculated;  // pipe 0 recirculation port
@@ -125,6 +126,11 @@ control Ingress(
 {
 	/* Collectives module */
 	Collectives() collectives;
+
+	CRCPolynomial<bit<32>>(0x04c11db7, true, true, false, 0xffffffff, 0xffffff) icrc_poly;
+	Hash<bit<32>>(HashAlgorithm_t.CUSTOM, icrc_poly) icrc_hash1;
+	Hash<bit<32>>(HashAlgorithm_t.CUSTOM, icrc_poly) icrc_hash2;
+	Hash<bit<32>>(HashAlgorithm_t.CUSTOM, icrc_poly) icrc_hash3;
 
 
 	action roce_ack_reflect(bit<24> dst_qp)
@@ -218,6 +224,12 @@ control Ingress(
 	apply {
 		ig_tm_md.bypass_egress = 0;
 
+		/* Logics violation: This should really be in the else if-if-clause... */
+		if (hdr.aggregate.isValid())
+		{
+			collectives.apply(hdr, meta, ig_intr_md, ig_dprsr_md, ig_tm_md);
+		}
+
 		if (meta.cpoffload.isValid() && meta.cpoffload.port_id != 65535)
 		{
 			/* Override all other actions and output the packet on the
@@ -227,13 +239,172 @@ control Ingress(
 		}
 		else if (hdr.ethernet.isValid())
 		{
+
 			/* Ethernet switch */
 			switching_table_src.apply();
 			switching_table.apply();
 
-			if (meta.is_coll == 1 && hdr.aggregate.isValid())
+			/* NOTE: Avoid Layer-2 address checking (layering violation!) s.t.
+			   the unit_selector can happen a stage earlier. */
+			if (hdr.aggregate.isValid())
 			{
-				collectives.apply(hdr, meta, ig_intr_md, ig_dprsr_md, ig_tm_md);
+				if (meta.agg_have_unit)
+				{
+					bit<32> tmp;
+
+					tmp = icrc_hash1.get({
+						hdr.aggregate.val00,
+						hdr.aggregate.val01,
+						hdr.aggregate.val02,
+						hdr.aggregate.val03,
+						hdr.aggregate.val04,
+						hdr.aggregate.val05,
+						hdr.aggregate.val06,
+						hdr.aggregate.val07,
+						hdr.aggregate.val08,
+						hdr.aggregate.val09,
+						hdr.aggregate.val10,
+						hdr.aggregate.val11,
+						hdr.aggregate.val12,
+						hdr.aggregate.val13,
+						hdr.aggregate.val14,
+						hdr.aggregate.val15,
+						32w0, //hdr.aggregate.val16,
+						32w0, //hdr.aggregate.val17,
+						32w0, //hdr.aggregate.val18,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0
+					});
+
+					tmp = tmp ^ icrc_hash2.get({
+						hdr.aggregate.val16,
+						hdr.aggregate.val17,
+						hdr.aggregate.val18,
+						hdr.aggregate.val19,
+						hdr.aggregate.val20,
+						hdr.aggregate.val21,
+						hdr.aggregate.val22,
+						hdr.aggregate.val23,
+						hdr.aggregate.val24,
+						hdr.aggregate.val25,
+						hdr.aggregate.val26,
+						hdr.aggregate.val27,
+						hdr.aggregate.val28,
+						hdr.aggregate.val29,
+						hdr.aggregate.val30,
+						hdr.aggregate.val31,
+						hdr.aggregate.val32,
+						hdr.aggregate.val33,
+						hdr.aggregate.val34,
+						hdr.aggregate.val35,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0,
+						32w0
+					});
+
+					hdr.roce_checksum.icrc = tmp ^ icrc_hash3.get({
+						//hdr.aggregate.val32,
+						//hdr.aggregate.val33,
+						//hdr.aggregate.val34,
+						//hdr.aggregate.val35,
+						hdr.aggregate.val36,
+						hdr.aggregate.val37,
+						hdr.aggregate.val38,
+						hdr.aggregate.val39,
+						hdr.aggregate.val40,
+						hdr.aggregate.val41,
+						hdr.aggregate.val42,
+						hdr.aggregate.val43,
+						hdr.aggregate.val44,
+						hdr.aggregate.val45,
+						hdr.aggregate.val46,
+						hdr.aggregate.val47,
+						hdr.aggregate.val48,
+						hdr.aggregate.val49,
+						hdr.aggregate.val50,
+						hdr.aggregate.val51,
+						hdr.aggregate.val52,
+						hdr.aggregate.val53,
+						hdr.aggregate.val54,
+						hdr.aggregate.val55,
+						hdr.aggregate.val56,
+						hdr.aggregate.val57,
+						hdr.aggregate.val58,
+						hdr.aggregate.val59,
+						hdr.aggregate.val60,
+						hdr.aggregate.val61,
+						hdr.aggregate.val62,
+						hdr.aggregate.val63
+					});
+				}
 			}
 			else if (meta.is_coll == 1 && hdr.roce.isValid() && hdr.roce.opcode == 17)
 			{
@@ -309,6 +480,7 @@ parser EgressParser(
 		pkt.extract(hdr.ipv4);
 		pkt.extract(hdr.udp);
 		pkt.extract(hdr.roce);
+		//pkt.extract(hdr.roce_checksum);
 
 		transition accept;
 	}
@@ -324,9 +496,114 @@ control Egress(
 {
 	CollectivesDistributor() collectives_distributor;
 
+	CRCPolynomial<bit<32>>(0x04c11db7, true, true, false, 0xffffffff, 0xffffff) icrc_poly;
+	Hash<bit<32>>(HashAlgorithm_t.CUSTOM, icrc_poly) icrc_hash;
+
 	apply {
-		if (meta.bridge_header.agg_unit != 65535) {
+		if (hdr.roce.isValid()) {
 			collectives_distributor.apply(hdr, meta, eg_intr_md);
+
+			bit<32> tmp;
+
+			/* Update ICRC (CRC(A^B) = CRC(A) ^ CRC(B) ^ const; and
+			padding to the left with zeros works transparently by
+			applaying the same equality. see
+			e.g. https://stackoverflow.com/a/23126768) */
+			tmp = hdr.roce_checksum.icrc ^ icrc_hash.get({
+				hdr.ipv4.version,
+				hdr.ipv4.ihl,
+				8w0xff,
+				hdr.ipv4.total_length,
+				hdr.ipv4.identification,
+				hdr.ipv4.flags,
+				hdr.ipv4.fragment_offset,
+				8w0xff,
+				hdr.ipv4.protocol,
+				16w0xffff,
+				hdr.ipv4.src_addr,
+				hdr.ipv4.dst_addr,
+				hdr.udp.src_port,
+				hdr.udp.dst_port,
+				hdr.udp.length,
+				16w0xffff,
+				hdr.roce.opcode,
+				hdr.roce.se,
+				hdr.roce.migreq,
+				hdr.roce.pad_cnt,
+				hdr.roce.version,
+				hdr.roce.partition_key,
+				8w0xff,
+				hdr.roce.dst_qp,
+				hdr.roce.ack_req,
+				hdr.roce.reserved2,
+				hdr.roce.psn,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0,
+				32w0
+			});
+
+			//hdr.roce_checksum.icrc = tmp;
 		}
 	}
 }
