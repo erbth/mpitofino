@@ -127,9 +127,9 @@ void ASICDriver::initial_setup()
 	/* Create multicast groups */
 	/* PRE uses port-stride per pipe of 128; 16 100G ports per pipe */
 	vector<bf_rt_id_t> port_ids;
-	for (int i = 0; i < 4; i++)
+	for (int i = 0; i < 4; i += 3)
 	{
-		for (int j = 0; j < (i == 3 ? 14 : 16); j++)
+		for (int j = 0; j < 16; j++)
 			port_ids.push_back(i*128 + j*4);
 	}
 
@@ -253,7 +253,7 @@ void ASICDriver::initial_setup()
 	uint8_t value[6] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 	uint8_t mask[6] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
-	vector<bf_rt_id_t> to_ignore{64, 68, 192, 196, 320, 324, 440, 444, 448, 452};
+	vector<bf_rt_id_t> to_ignore{64, 68, 448, 452};
 
 	for (auto p : to_ignore)
 	{
@@ -273,6 +273,38 @@ void ASICDriver::initial_setup()
 				),
 				"Failed to add entry to switching_table_src");
 	}
+
+	check_bf_status(table_add_or_mod(*switching_table_src,
+				*session, dev_tgt,
+				*table_create_key<const uint8_t*, uint64_t>(
+					switching_table_src,
+					table_field_desc_t<const uint8_t*>::create_ternary(
+						"hdr.ethernet.src_addr", value, mask, sizeof(value)),
+					table_field_desc_t<uint64_t>::create_ternary(
+						"meta.ingress_port", 128, 0x180)
+				),
+				*table_create_data_action<>(
+					switching_table_src,
+					"NoAction"
+				)
+			),
+			"Failed to add entry to switching_table_src");
+
+	check_bf_status(table_add_or_mod(*switching_table_src,
+				*session, dev_tgt,
+				*table_create_key<const uint8_t*, uint64_t>(
+					switching_table_src,
+					table_field_desc_t<const uint8_t*>::create_ternary(
+						"hdr.ethernet.src_addr", value, mask, sizeof(value)),
+					table_field_desc_t<uint64_t>::create_ternary(
+						"meta.ingress_port", 256, 0x180)
+				),
+				*table_create_data_action<>(
+					switching_table_src,
+					"NoAction"
+				)
+			),
+			"Failed to add entry to switching_table_src");
 }
 
 
@@ -451,9 +483,25 @@ void ASICDriver::on_st_repo_channels()
 		size_t pos = 1;
 		for (auto& [ipart,part] : rc->participants)
 		{
+			/* Translate switch port for recirculation */
+			auto sw_port = part.switch_port;
+			switch (sw_port & 0x180)
+			{
+				case 0:
+					sw_port += 128;
+					break;
+
+				case 384:
+					sw_port -= 128;
+					break;
+
+				default:
+					continue;
+			}
+			
 			group_ports.push_back({
 					0x1000 + 0x200 * (rc->agg_unit / 8) + (pos-1),
-					part.switch_port,
+					sw_port,
 					pos});
 
 			pos++;
@@ -503,6 +551,21 @@ void ASICDriver::on_st_repo_channels()
 			auto pipe_tgt = dev_tgt;
 			pipe_tgt.pipe_id = pipe;
 
+			auto pipe_tgt_recirc = dev_tgt;
+			switch (pipe)
+			{
+			case 0:
+				pipe_tgt_recirc.pipe_id = 1;
+				break;
+
+			case 3:
+				pipe_tgt_recirc.pipe_id = 2;
+				break;
+
+			default:
+				break;
+			}
+
 			if (full_bitmap_high[pipe] >= (pipe == 3 ? 0x1fffffffUL : 0xffffffffUL))
 				throw runtime_error("Too many clients per pipe");
 			
@@ -532,7 +595,7 @@ void ASICDriver::on_st_repo_channels()
 
 			/* Output address update */
 			check_bf_status(table_add_or_mod(
-				*collectives_output_address, *session, pipe_tgt,
+				*collectives_output_address, *session, pipe_tgt_recirc,
 				*table_create_key<uint64_t, uint64_t>(
 					collectives_output_address,
 					{"meta.bridge_header.agg_unit", rc->agg_unit},
@@ -622,7 +685,7 @@ void ASICDriver::on_st_repo_channels()
 					table_field_desc_t<uint64_t>::create_ternary(
 						"hdr.roce.dst_qp", (uint32_t) rc->fabric_qp_common << 8, 0xffff00),
 					table_field_desc_t<uint64_t>::create_ternary(
-						"meta.ingress_port", 3*128 + 56 + pipe*4, 0x1ff)),
+						"meta.ingress_port", 3*128 + 64, 0x1ff)),
 				*table_create_data_action<uint64_t, uint64_t, uint64_t>(
 					collectives_unit_selector, "Ingress.collectives.select_agg_unit",
 					{"agg_unit", rc->agg_unit},
@@ -662,7 +725,7 @@ void ASICDriver::on_st_repo_channels()
 					{"hdr.ipv4.dst_addr",
 					 reinterpret_cast<const uint8_t*>(&rc->fabric_ip), sizeof(rc->fabric_ip)},
 					table_field_desc_t<uint64_t>::create_ternary(
-						"hdr.roce.dst_qp", (uint32_t) rc->fabric_qp_common, 0xffff00),
+						"hdr.roce.dst_qp", (uint32_t) rc->fabric_qp_common << 8, 0xffff00),
 					table_field_desc_t<uint64_t>::create_ternary(
 						"meta.ingress_port", 3*128 + 68, 0x1ff)),
 				*table_create_data_action<uint64_t, uint64_t, uint64_t>(
@@ -712,7 +775,7 @@ void ASICDriver::on_st_repo_channels()
 				action = table_create_data_action<uint64_t>(
 						collectives_check_complete,
 						"Ingress.collectives.check_complete_next_pipe",
-						{"port", 3*128U + 56 + pipe*4});
+						{"port", 3*128U + 64 + pipe*4});
 			}
 			else
 			{
@@ -774,10 +837,25 @@ void ASICDriver::on_st_repo_channels()
 	/* Delete excess channels from ASIC */
 	set<uint16_t> agg_units_to_clear;
 
-	for (int pipe = 0; pipe < 4; pipe++)
+	for (int pipe = 0; pipe < 4; pipe += 3)
 	{
 		auto pipe_tgt = dev_tgt;
 		pipe_tgt.pipe_id = pipe;
+
+		auto pipe_tgt_recirc = dev_tgt;
+		switch (pipe)
+		{
+		case 0:
+			pipe_tgt_recirc.pipe_id = 1;
+			break;
+
+		case 3:
+			pipe_tgt_recirc.pipe_id = 2;
+			break;
+
+		default:
+			break;
+		}
 
 		/* unit_selector */
 		bf_rt_id_t act_id_select_agg_unit{};
@@ -856,7 +934,7 @@ void ASICDriver::on_st_repo_channels()
 
 		
 		{
-			table_iterator i(*collectives_output_address, *session, pipe_tgt);
+			table_iterator i(*collectives_output_address, *session, pipe_tgt_recirc);
 			for (; i; ++i)
 			{
 				auto k = (*i).first;
@@ -868,7 +946,7 @@ void ASICDriver::on_st_repo_channels()
 				if (agg_units_in_use.find(agg_unit) == agg_units_in_use.end())
 				{
 					check_bf_status(collectives_output_address->tableEntryDel(
-										*session, pipe_tgt, *k),
+										*session, pipe_tgt_recirc, *k),
 									"tableEntryDel");
 				}
 			}

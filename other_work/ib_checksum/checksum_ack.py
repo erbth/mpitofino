@@ -91,14 +91,14 @@ class ICRC:
 
 
 def main():
-    pkt = load_packet('packet.hex')
+    pkt = load_packet('packet_ack.hex')
 
     eth  = pkt[0:14]
     ip   = pkt[14:34]
     udp  = pkt[34:42]
     bth  = pkt[42:54]
-    data = pkt[54:310]
-    icrc = pkt[310:]
+    data = pkt[54:58]
+    icrc = pkt[58:]
 
     c = ICRC()
 
@@ -134,11 +134,6 @@ def main():
 
     print("computed: %s" % hex(c.value))
     print("expected: 0x%x%x%x%x" % (icrc[0], icrc[1], icrc[2], icrc[3]))
-
-
-    c = ICRC()
-    c.update_bytes(b'\x00' * 256)
-    print(hex(c.value))
 
 
 if __name__ == '__main__':

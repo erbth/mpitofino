@@ -349,9 +349,9 @@ void PacketProcessor::on_discovery_protocol_timer()
 	char buf[1024];
 
 	/* TODO: Query state_repo for active ports and use those */
-	for (int i = 0; i < 4; i++)
+	for (int i = 0; i < 4; i += 3)
 	{
-		for (int j = 0; j < (i == 3 ? 14 : 16); j++)
+		for (int j = 0; j < 16; j++)
 		{
 			memset(buf, 0, sizeof(buf));
 

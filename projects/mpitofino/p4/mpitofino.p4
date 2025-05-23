@@ -1,4 +1,4 @@
-/* -*- P4_16 -*- */
+/* -*- P4_16 -* */
 
 #include <core.p4>
 #include <tna.p4>
@@ -40,9 +40,12 @@ parser IngressParser(
 
 		meta.bridge_header.setValid();
 		meta.bridge_header.agg_unit = 65535;
+		meta.bridge_header.is_roce_ack = false;
 
 		transition select(ig_intr_md.ingress_port) {
 			64 : parse_cpoffload;
+			128 &&& 0x180 : parse_recirc_fanout;
+			256 &&& 0x180 : parse_recirc_fanout;
 			default : parse_ethernet;
 		}
 	}
@@ -98,7 +101,6 @@ parser IngressParser(
 
 	state parse_aggregate {
 		pkt.extract(hdr.aggregate);
-		pkt.extract(hdr.roce_checksum);
 
 		transition select(ig_intr_md.ingress_port) {
 			68 : parse_aggregate_recirculated;  // pipe 0 recirculation port
@@ -114,6 +116,14 @@ parser IngressParser(
 
 		transition accept;
 	}
+
+
+	state parse_recirc_fanout {
+		pkt.extract(hdr.recirc_fanout);
+		pkt.extract(hdr.recirc_fanout_payload);
+		pkt.extract(hdr.roce_checksum);
+		transition accept;
+	}
 }
 
 control Ingress(
@@ -127,7 +137,7 @@ control Ingress(
 	/* Collectives module */
 	Collectives() collectives;
 
-	CRCPolynomial<bit<32>>(0x04c11db7, true, true, false, 0xffffffff, 0xffffff) icrc_poly;
+	CRCPolynomial<bit<32>>(0x04c11db7, true, true, false, 0xffffffff, 0xffffffff) icrc_poly;
 	Hash<bit<32>>(HashAlgorithm_t.CUSTOM, icrc_poly) icrc_hash1;
 	Hash<bit<32>>(HashAlgorithm_t.CUSTOM, icrc_poly) icrc_hash2;
 	Hash<bit<32>>(HashAlgorithm_t.CUSTOM, icrc_poly) icrc_hash3;
@@ -150,8 +160,8 @@ control Ingress(
 
 		hdr.roce.dst_qp = dst_qp;
 
-		ig_tm_md.bypass_egress = 1;
 		ig_tm_md.ucast_egress_port = meta.ingress_port;
+		meta.bridge_header.is_roce_ack = true;
 	}
 	
 	table roce_ack_reflector {
@@ -167,6 +177,36 @@ control Ingress(
 		default_action = NoAction;
 
 		size = 1024;
+	}
+
+
+	action adapt_recirc_fanout_sub() {
+		ig_tm_md.ucast_egress_port = meta.ingress_port & 9w0x7f;
+	}
+
+	action adapt_recirc_fanout_add() {
+		ig_tm_md.ucast_egress_port = meta.ingress_port | 9w0x80;
+	}
+	
+	/* Somehow does not work with meta.ingress_port[8:7] *and* use of
+	meta.ingress_port in the actions. */
+	table adapt_recirc_fanout_port {
+		key = {
+			meta.ingress_port : ternary;
+		}
+
+		actions = {
+			adapt_recirc_fanout_sub;
+			adapt_recirc_fanout_add;
+			NoAction;
+		}
+		default_action = NoAction;
+		size = 2;
+
+		const entries = {
+			(128 &&& 0x180) : adapt_recirc_fanout_sub();
+			(256 &&& 0x180) : adapt_recirc_fanout_add();
+		}
 	}
 
 
@@ -229,6 +269,15 @@ control Ingress(
 		{
 			collectives.apply(hdr, meta, ig_intr_md, ig_dprsr_md, ig_tm_md);
 		}
+		else if (hdr.recirc_fanout.isValid())
+		{
+			adapt_recirc_fanout_port.apply();
+			hdr.roce_checksum.icrc = hdr.recirc_fanout.icrc;
+			ig_tm_md.bypass_egress = 1;
+			ig_dprsr_md.drop_ctl = 0;
+
+			hdr.recirc_fanout.setInvalid();
+		}
 
 		if (meta.cpoffload.isValid() && meta.cpoffload.port_id != 65535)
 		{
@@ -269,9 +318,9 @@ control Ingress(
 						hdr.aggregate.val13,
 						hdr.aggregate.val14,
 						hdr.aggregate.val15,
-						32w0, //hdr.aggregate.val16,
-						32w0, //hdr.aggregate.val17,
-						32w0, //hdr.aggregate.val18,
+						32w0,
+						32w0,
+						32w0,
 						32w0,
 						32w0,
 						32w0,
@@ -370,11 +419,7 @@ control Ingress(
 						32w0
 					});
 
-					hdr.roce_checksum.icrc = tmp ^ icrc_hash3.get({
-						//hdr.aggregate.val32,
-						//hdr.aggregate.val33,
-						//hdr.aggregate.val34,
-						//hdr.aggregate.val35,
+					meta.bridge_header.icrc = tmp ^ icrc_hash3.get({
 						hdr.aggregate.val36,
 						hdr.aggregate.val37,
 						hdr.aggregate.val38,
@@ -470,9 +515,26 @@ parser EgressParser(
 		 * header. */
 
 		transition select(meta.bridge_header.agg_unit) {
-			65535 : accept;
+			65535 : parse_non_aggregate;
 			default: parse_aggregate;
 		}
+	}
+
+	state parse_non_aggregate {
+		transition select(meta.bridge_header.is_roce_ack) {
+			true : parse_roce_ack;
+			default : accept;
+		}
+	}
+
+	state parse_roce_ack {
+		pkt.extract(hdr.ethernet);
+		pkt.extract(hdr.ipv4);
+		pkt.extract(hdr.udp);
+		pkt.extract(hdr.roce);
+		pkt.extract(hdr.roce_ack);
+
+		transition accept;
 	}
 
 	state parse_aggregate {
@@ -480,7 +542,6 @@ parser EgressParser(
 		pkt.extract(hdr.ipv4);
 		pkt.extract(hdr.udp);
 		pkt.extract(hdr.roce);
-		//pkt.extract(hdr.roce_checksum);
 
 		transition accept;
 	}
@@ -496,11 +557,52 @@ control Egress(
 {
 	CollectivesDistributor() collectives_distributor;
 
-	CRCPolynomial<bit<32>>(0x04c11db7, true, true, false, 0xffffffff, 0xffffff) icrc_poly;
-	Hash<bit<32>>(HashAlgorithm_t.CUSTOM, icrc_poly) icrc_hash;
+	CRCPolynomial<bit<32>>(0x04c11db7, true, true, false, 0xffffffff, 0xffffffff) icrc_poly;
+	Hash<bit<32>>(HashAlgorithm_t.CUSTOM, icrc_poly) icrc_hash1;
+	Hash<bit<32>>(HashAlgorithm_t.CUSTOM, icrc_poly) icrc_hash2;
 
 	apply {
-		if (hdr.roce.isValid()) {
+		if (hdr.roce_ack.isValid())
+		{
+			bit<32> tmp;
+
+			tmp = icrc_hash1.get({
+				hdr.ipv4.version,
+				hdr.ipv4.ihl,
+				8w0xff,
+				hdr.ipv4.total_length,
+				hdr.ipv4.identification,
+				hdr.ipv4.flags,
+				hdr.ipv4.fragment_offset,
+				8w0xff,
+				hdr.ipv4.protocol,
+				16w0xffff,
+				hdr.ipv4.src_addr,
+				hdr.ipv4.dst_addr,
+				hdr.udp.src_port,
+				hdr.udp.dst_port,
+				hdr.udp.length,
+				16w0xffff,
+				hdr.roce.opcode,
+				hdr.roce.se,
+				hdr.roce.migreq,
+				hdr.roce.pad_cnt,
+				hdr.roce.version,
+				hdr.roce.partition_key,
+				8w0xff,
+				hdr.roce.dst_qp,
+				hdr.roce.ack_req,
+				hdr.roce.reserved2,
+				hdr.roce.psn,
+				hdr.roce_ack.syndrome,
+				hdr.roce_ack.msn
+			}) ^ 0x71acd589;  // Correcting summand because of missing LRH
+
+			/* Not sure why an endianess conversion is required here */
+			hdr.roce_ack.icrc = tmp[7:0] ++ tmp[15:8] ++ tmp[23:16] ++ tmp[31:24];
+		}
+		else if (hdr.roce.isValid())
+		{
 			collectives_distributor.apply(hdr, meta, eg_intr_md);
 
 			bit<32> tmp;
@@ -509,7 +611,7 @@ control Egress(
 			padding to the left with zeros works transparently by
 			applaying the same equality. see
 			e.g. https://stackoverflow.com/a/23126768) */
-			tmp = hdr.roce_checksum.icrc ^ icrc_hash.get({
+			tmp = meta.bridge_header.icrc ^ icrc_hash2.get({
 				hdr.ipv4.version,
 				hdr.ipv4.ihl,
 				8w0xff,
@@ -603,7 +705,13 @@ control Egress(
 				32w0
 			});
 
-			//hdr.roce_checksum.icrc = tmp;
+			/* Not sure why an endianess conversion is required here */
+			tmp = tmp[7:0] ++ tmp[15:8] ++ tmp[23:16] ++ tmp[31:24];
+
+			hdr.recirc_fanout.setValid();
+
+			/* xor const */
+			hdr.recirc_fanout.icrc = tmp ^ 0x60d95a72;
 		}
 	}
 }

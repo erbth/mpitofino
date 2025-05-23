@@ -13,11 +13,13 @@ struct node_bitmap_t {
 
 
 struct my_ingress_headers_t {
+	recirc_fanout_h recirc_fanout;
 	ethernet_h	ethernet;
 	ipv4_h ipv4;
 	udp_h udp;
 	roce_h roce;
 	aggregate_h aggregate;
+	recirc_fanout_payload_h recirc_fanout_payload;
 	roce_checksum_h roce_checksum;
 }
 
@@ -38,11 +40,12 @@ struct my_ingress_metadata_t {
 
 
 struct my_egress_headers_t {
+	recirc_fanout_h recirc_fanout;
 	ethernet_h	ethernet;
 	ipv4_h ipv4;
 	udp_h udp;
 	roce_h roce;
-	roce_checksum_h roce_checksum;
+	roce_ack_h roce_ack;
 }
 
 struct my_egress_metadata_t {

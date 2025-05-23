@@ -149,7 +149,28 @@ header aggregate_h {
 	bit<32> val63;
 }
 
+header roce_ack_h {
+	bit<8>  syndrome;
+	bit<24> msn;
+	bit<32> icrc;
+}
+
 /* A header to take metadata from the ingress to the egress pipe. */
 header bridge_header_t {
 	bit<16> agg_unit;
+	bit<32> icrc;
+	bool is_roce_ack;  // Avoid parsing the whole header stack in the egress pipeline
+	bit<7> pad;
+}
+
+
+/* Preprended to packets that are recirculated for the purpose of storing the
+   ICRC (i.e. on broadcast or `fanout'). */
+header recirc_fanout_h {
+	bit<32> icrc;
+}
+
+header recirc_fanout_payload_h {
+	bit<((12+8+20+14)*8)> headers;
+	bit<(256*8)> payload;
 }
