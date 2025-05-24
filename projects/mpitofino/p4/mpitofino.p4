@@ -30,6 +30,7 @@ parser IngressParser(
 
 	state meta_init {
 		meta.ingress_port = ig_intr_md.ingress_port;
+		meta.mac_for_digest = 0;
 		meta.is_coll = 0;
 
 		/* Collectives module's state */
@@ -245,6 +246,10 @@ control Ingress(
 	action stsrc_unknown()
 	{
 		ig_dprsr_md.digest_type = ETH_SWITCH_LEARN_DIGEST;
+
+		/* Save current mac address, as it might be changed later by the RoCE
+		   ack reflector */
+		meta.mac_for_digest = hdr.ethernet.src_addr;
 	}
 
 	@idletime_precision(3)
@@ -488,7 +493,7 @@ control IngressDeparser(
 		if (ig_dprsr_md.digest_type == ETH_SWITCH_LEARN_DIGEST)
 		{
 			eth_switch_digest.pack({
-				hdr.ethernet.src_addr,
+				meta.mac_for_digest,
 				meta.ingress_port
 			});
 		}

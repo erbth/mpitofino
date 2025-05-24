@@ -28,6 +28,7 @@ struct my_ingress_metadata_t {
 
 	/* S.t. the ingress port will be available in the deparser. */
 	PortId_t ingress_port;
+	bit<48> mac_for_digest;
 	bit<1> is_coll;  // process packet with collectives unit
 
 	bit<16> agg_unit;

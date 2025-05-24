@@ -305,6 +305,31 @@ void ASICDriver::initial_setup()
 				)
 			),
 			"Failed to add entry to switching_table_src");
+
+
+	/* Also, do not update the switching table for packets sent from our own
+	   MAC address for robustness against `strange' ethernet frames on the
+	   network. */
+	uint8_t mask_match[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+	auto coll_mac = st_repo.get_collectives_module_mac_addr();
+	check_bf_status(table_add_or_mod(*switching_table_src,
+				*session, dev_tgt,
+				*table_create_key<const uint8_t*, uint64_t>(
+					switching_table_src,
+					table_field_desc_t<const uint8_t*>::create_ternary(
+						"hdr.ethernet.src_addr",
+						reinterpret_cast<const uint8_t*>(&coll_mac),
+						mask_match,
+						sizeof(mask)),
+					table_field_desc_t<uint64_t>::create_ternary(
+						"meta.ingress_port", 0, 0)
+				),
+				*table_create_data_action<>(
+					switching_table_src,
+					"NoAction"
+				)
+			),
+			"Failed to add entry to switching_table_src");
 }
 
 
