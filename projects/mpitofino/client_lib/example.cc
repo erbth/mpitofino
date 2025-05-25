@@ -51,7 +51,8 @@ int main(int argc, char** argv)
 
 
 	/* Perform an allreduce operation */
-	const size_t cnt_elem = 256 * 2;
+	//const size_t cnt_elem = 1024 * 1024 * 1024;
+	const size_t cnt_elem = 1024 * 1024 * 100;
 	int32_t* sbuf =     (int32_t*) aligned_alloc(256, cnt_elem * sizeof(int32_t));
 	int32_t* dbuf =     (int32_t*) aligned_alloc(256, cnt_elem * sizeof(int32_t));
 	int32_t* expected = (int32_t*) aligned_alloc(256, cnt_elem * sizeof(int32_t));
@@ -68,7 +69,14 @@ int main(int argc, char** argv)
 	}
 
 
-	agg_group.allreduce(sbuf, dbuf, cnt_elem, mpitofino::datatype_t::INT32, 1);
+	const size_t cnt_rep = 1;
+
+	auto t1 = get_mono_time();
+
+	for (size_t i = 0; i < cnt_rep; i++)
+		agg_group.allreduce(sbuf, dbuf, cnt_elem, mpitofino::datatype_t::INT32, 1);
+
+	auto t2 = get_mono_time();
 
 
 	/* Compare result */
@@ -85,14 +93,15 @@ int main(int argc, char** argv)
 		}
 	}
 
-	if (match)
-	{
-		printf("data matches.\n");
-		return 0;
-	}
-	else
-	{
+	if (!match)
 		printf("data differs.\n");
-		return 1;
-	}
+
+	auto dt = time_diff(t2, t1);
+	double data_size = cnt_elem * sizeof(int32_t);
+	auto rate = (data_size * cnt_rep) / dt;
+	auto latency = dt / cnt_rep;
+
+	printf("dt: %es, datasize: %eB, rate: %eB/s, latency: %es\n", dt, data_size, rate, latency);
+
+	return match ? 0 : 1;
 }

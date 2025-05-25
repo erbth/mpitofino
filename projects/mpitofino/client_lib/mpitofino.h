@@ -51,6 +51,9 @@ protected:
 	WrappedObject<ibv_device*> ib_dev_list{ibv_free_device_list};
 	ibv_device  *ib_dev{};
 	WrappedObject<ibv_context> ib_ctx{ibv_close_device};
+	unsigned ib_gid{};
+
+	void choose_gid();
 
 public:
 	const uint64_t client_id;
@@ -82,8 +85,11 @@ struct CollectiveChannel
 	Client& client;
 	AggregationGroup& agg_group;
 
-	const size_t chunk_size = 4096;
-	dynamic_aligned_buffer ib_buf{4096, chunk_size * 2};
+	/* NOTE: This must not exceed the per-channel buffer capacity of the
+	   switch */
+	const size_t chunk_size = 32768;
+	const size_t req_in_flight = 2;
+	dynamic_aligned_buffer ib_buf{4096, chunk_size * req_in_flight * 2};
 
 	WrappedObject<ibv_pd> ib_pd{ibv_dealloc_pd};
 	WrappedObject<ibv_mr> ib_mr{ibv_dereg_mr};
@@ -96,6 +102,8 @@ struct CollectiveChannel
 
 	CollectiveChannel(Client& client, AggregationGroup& agg_group);
 	void finalize_qp();
+
+	void discover_ib_gid();
 
 protected:
 	void setup_ib_pd();

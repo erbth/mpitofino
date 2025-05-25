@@ -1,7 +1,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <stdexcept>
+#include <set>
+#include <regex>
 #include "common/com_utils.h"
 #include "mpitofino.h"
 #include "client_lib_nd.pb.h"
@@ -147,6 +150,43 @@ void Client::open_ib_device()
 
 	/* Open device */
 	ib_ctx = ibv_open_device(ib_dev);
+
+	/* Choose gid */
+	choose_gid();
+	printf("  chosen gid: %u\n\n", ib_gid);
+}
+
+void Client::choose_gid()
+{
+	auto base = fs::path("/sys/class/infiniband") / ibv_get_device_name(ib_dev) / "ports/1";
+	
+	for (unsigned i = 0; i < 256; i++)
+	{
+		auto p = base / "gids" / to_string(i);
+		if (fs::exists(p))
+		{
+			ifstream f(p);
+			string s;
+			f >> s;
+
+			/* Select IPv4 addresses */
+			if (!regex_match(s, regex("^0000:0000:0000:0000:0000:ffff:[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$")))
+				continue;
+
+			/* Check if this is RoCEv2 */
+			ifstream f2(base / "gid_attrs/types" / to_string(i));
+			string s2, s3;
+			f2 >> s2 >> s3;
+
+			if (s2 != "RoCE" || s3 != "v2")
+				continue;
+
+			ib_gid = i;
+			return;
+		}
+	}
+
+	throw runtime_error("no suitable IB gid found");
 }
 
 
@@ -186,8 +226,8 @@ void CollectiveChannel::setup_ib_qp()
 		.send_cq = ib_cq.get(),
 		.recv_cq = ib_cq.get(),
 		.cap = {
-			.max_send_wr = 1,
-			.max_recv_wr = 1,
+			.max_send_wr = (unsigned) req_in_flight,
+			.max_recv_wr = (unsigned) req_in_flight,
 			.max_send_sge = 1,
 			.max_recv_sge = 1
 		},
@@ -229,7 +269,7 @@ void CollectiveChannel::finalize_qp()
 	qp_attr.ah_attr.src_path_bits = 0;
 	qp_attr.ah_attr.port_num = 1;
 	qp_attr.ah_attr.grh.hop_limit = 1;
-	qp_attr.ah_attr.grh.sgid_index = 1;  // TODO discover
+	qp_attr.ah_attr.grh.sgid_index = client.ib_gid;
 
 	/* Construct a mapped IPv4-address */
 	auto gid_ptr = (uint32_t*) &qp_attr.ah_attr.grh.dgid;
@@ -332,6 +372,16 @@ CollectiveChannel* AggregationGroup::get_channel(tag_t tag)
 }
 
 
+struct ring_elem_t
+{
+	char status = 0;
+
+	char* recv_buf{};
+	char* send_buf{};
+	size_t offset{};
+	size_t size{};
+};
+	
 void AggregationGroup::allreduce(
 		const void* sbuf, void* dbuf, size_t count,
 		datatype_t dtype, tag_t tag)
@@ -340,113 +390,134 @@ void AggregationGroup::allreduce(
 	auto ch = get_channel(tag);
 
 	/* Exchange data */
+	/* Setup ring buffer */
 	size_t size = count * get_datatype_element_size(dtype);
 
+	memset(ch->ib_buf.ptr(), 0, ch->ib_buf.size());
 	auto send_buf = ch->ib_buf.ptr();
-	auto recv_buf = ch->ib_buf.ptr() + ch->chunk_size;
+	auto recv_buf = ch->ib_buf.ptr() + ch->chunk_size * ch->req_in_flight;
 
-	memset(send_buf, 0, ch->chunk_size);
-	memset(recv_buf, 0, ch->chunk_size);
-
-	for (size_t i = 0; i < size; i += ch->chunk_size)
+	const size_t ring_size = ch->req_in_flight;
+	ring_elem_t ring[ring_size]{};
+	for (size_t i = 0; i < ring_size; i++)
 	{
-		auto to_send = min(ch->chunk_size, size - i);
-		convert_endianess((const uint8_t*) sbuf + i, send_buf, to_send, dtype);
+		ring[i].recv_buf = recv_buf + ch->chunk_size*i;
+		ring[i].send_buf = send_buf + ch->chunk_size*i;
+	}
 
 
-		/* Post receive */
-		ibv_sge recv_sge = {
-			.addr = (uintptr_t) recv_buf,
-			.length = (uint32_t) ch->chunk_size,
-			.lkey = ch->ib_mr->lkey
-		};
+	size_t send_pos = 0;
+	size_t outstanding_reqs = 0;
+	size_t ring_pos = 0;
 
-		ibv_recv_wr* recv_bad_wr;
-		ibv_recv_wr recv_wr = {
-			.wr_id = 1,
-			.sg_list = &recv_sge,
-			.num_sge = 1
-		};
-
-		auto ret = ibv_post_recv(ch->ib_qp.get(), &recv_wr, &recv_bad_wr);
-		if (ret)
-			throw runtime_error("Failed to post IB receive WR: " + to_string(ret));
-
-
-		/* Post send */
-		ibv_sge send_sge = {
-			.addr = (uintptr_t) send_buf,
-			.length = (uint32_t) ch->chunk_size,
-			.lkey = ch->ib_mr->lkey
-		};
-		
-		ibv_send_wr* send_bad_wr = nullptr;
-		ibv_send_wr send_wr = {
-			.wr_id = 2,
-			.sg_list = &send_sge,
-			.num_sge = 1,
-			.opcode = IBV_WR_SEND,
-			.send_flags = IBV_SEND_SIGNALED
-		};
-		
-		ret = ibv_post_send(ch->ib_qp.get(), &send_wr, &send_bad_wr);
-		if (ret)
-			throw runtime_error("Failed to post IB send WR: " + to_string(ret));
-
-
-		/* Wait for WRs to complete */
-		int cnt_complete = 0;
-		bool send_failed = false;
-		bool recv_failed = false;
-		ibv_wc_status send_status = IBV_WC_SUCCESS;
-		ibv_wc_status recv_status = IBV_WC_SUCCESS;
-
-		while (cnt_complete < 2)
+	while (send_pos < size || outstanding_reqs > 0)
+	{
+		/* Fill ring with new WRs */
+		while (send_pos < size)
 		{
-			ibv_wc wcs[32];
-			ret = ibv_poll_cq(ch->ib_cq.get(), sizeof(wcs) / sizeof(wcs[0]), wcs);
-			if (ret < 0)
-				throw runtime_error("Failed to poll IB CQ");
+			size_t next = (ring_pos + 1) % ring_size;
+			if (ring[next].status)
+				break;
 
-			for (auto i = 0; i < ret; i++)
-			{
-				auto& wc = wcs[i];
-				
-				cnt_complete++;
+			ring_pos = next;
+			ring[ring_pos].status = 2;
+			outstanding_reqs += 2;
 
-				if (wc.wr_id == 2)
-					printf("send complete\n");
+			auto to_send = min(ch->chunk_size, size - send_pos);
+			ring[ring_pos].offset = send_pos;
+			ring[ring_pos].size = to_send;
 
-				else if (wc.wr_id == 1)
-					printf("recv complete\n");
+			/* Endianess conversion for send */
+			convert_endianess(
+				(const uint8_t*) sbuf + send_pos,
+				ring[ring_pos].send_buf,
+				to_send,
+				dtype);
 
-				else
-					printf("unknown completion\n");
+			send_pos += to_send;
 
-				if (wc.status != IBV_WC_SUCCESS ||
-					wc.byte_len != ch->chunk_size)
-				{
-					if (wc.wr_id == 2)
-					{
-						send_status = wc.status;
-						send_failed = true;
-					}
-					else
-					{
-						recv_status = wc.status;
-						recv_failed = true;
-					}
-				}
-			}
+			/* Post receive */
+			ibv_sge recv_sge = {
+				.addr = (uintptr_t) ring[ring_pos].recv_buf,
+				.length = (uint32_t) ch->chunk_size,
+				.lkey = ch->ib_mr->lkey
+			};
+
+			ibv_recv_wr* recv_bad_wr;
+			ibv_recv_wr recv_wr = {
+				.wr_id = 0x1000 + ring_pos,
+				.sg_list = &recv_sge,
+				.num_sge = 1
+			};
+
+			auto ret = ibv_post_recv(ch->ib_qp.get(), &recv_wr, &recv_bad_wr);
+			if (ret)
+				throw runtime_error("Failed to post IB receive WR: " + to_string(ret));
+
+			/* Post send */
+			ibv_sge send_sge = {
+				.addr = (uintptr_t) ring[ring_pos].send_buf,
+				.length = (uint32_t) ch->chunk_size,
+				.lkey = ch->ib_mr->lkey
+			};
+
+			ibv_send_wr* send_bad_wr = nullptr;
+			ibv_send_wr send_wr = {
+				.wr_id = 0x2000 + ring_pos,
+				.sg_list = &send_sge,
+				.num_sge = 1,
+				.opcode = IBV_WR_SEND,
+				.send_flags = IBV_SEND_SIGNALED
+			};
+
+			ret = ibv_post_send(ch->ib_qp.get(), &send_wr, &send_bad_wr);
+			if (ret)
+				throw runtime_error("Failed to post IB send WR: " + to_string(ret));
 		}
 
-		if (recv_failed)
-			throw runtime_error("IB recv failed: " + to_string(recv_status));
 
-		if (send_failed)
-			throw runtime_error("IB send failed: " + to_string(send_status));
+		/* Process completed WRs */
+		ibv_wc wcs[ring_size*2]{};
+		auto ret = ibv_poll_cq(ch->ib_cq.get(), sizeof(wcs) / sizeof(wcs[0]), wcs);
+		if (ret < 0)
+			throw runtime_error("Failed to poll IB CQ");
 
-		convert_endianess(recv_buf, (uint8_t*) dbuf + i, to_send, dtype);
+		for (int i = 0; i < ret; i++)
+		{
+			auto& wc = wcs[i];
+
+			if (wc.wr_id >= 0x2000)
+			{
+				auto pos = wc.wr_id - 0x2000;
+
+				if (wc.status != IBV_WC_SUCCESS)
+					throw runtime_error("IB send failed: " + to_string(ret));
+
+				ring[pos].status--;
+				outstanding_reqs--;
+			}
+			else
+			{
+				auto pos = wc.wr_id - 0x1000;
+
+				if (wc.status != IBV_WC_SUCCESS ||
+					(wc.byte_len != ch->chunk_size))
+				{
+					throw runtime_error("IB recv failed: " + to_string(ret));
+				}
+
+				/* Endianess conversion of received data */
+				convert_endianess(
+					ring[pos].recv_buf,
+					(uint8_t*) dbuf + ring[pos].offset,
+					ring[pos].size,
+					dtype);
+
+				/* Mark ring buffer entry as free */
+				ring[pos].status--;
+				outstanding_reqs--;
+			}
+		}
 	}
 }
 

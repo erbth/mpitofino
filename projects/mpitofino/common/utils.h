@@ -2,6 +2,7 @@
 #define __COMMON_UTILS_H
 
 #include <cstdint>
+#include <ctime>
 #include <stdexcept>
 #include <system_error>
 #include <string>
@@ -186,5 +187,18 @@ std::string to_hex_string(int i);
 
 /* E.g. for IPv4 and ICMP; RFC1071 */
 uint16_t internet_checksum(const char* data, size_t size);
+
+
+inline timespec get_mono_time()
+{
+	timespec t;
+	clock_gettime(CLOCK_MONOTONIC, &t);
+	return t;
+}
+
+inline double time_diff(const timespec& a, const timespec& b)
+{
+	return (a.tv_sec - b.tv_sec) + (a.tv_nsec - b.tv_nsec)*1e-9;
+}
 
 #endif /* __COMMON_UTILS_H */
