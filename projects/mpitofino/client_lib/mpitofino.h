@@ -87,8 +87,8 @@ struct CollectiveChannel
 
 	/* NOTE: This must not exceed the per-channel buffer capacity of the
 	   switch */
-	const size_t chunk_size = 32768;
-	const size_t req_in_flight = 2;
+	const size_t chunk_size = 16384;
+	const size_t req_in_flight = 4;
 	dynamic_aligned_buffer ib_buf{4096, chunk_size * req_in_flight * 2};
 
 	WrappedObject<ibv_pd> ib_pd{ibv_dealloc_pd};

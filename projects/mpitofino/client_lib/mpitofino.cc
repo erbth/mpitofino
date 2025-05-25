@@ -217,7 +217,7 @@ void CollectiveChannel::setup_ib_pd()
 void CollectiveChannel::setup_ib_qp()
 {
 	/* Create CQ */
-	ib_cq = ibv_create_cq(client.ib_ctx.get(), 2, nullptr, nullptr, 0);
+	ib_cq = ibv_create_cq(client.ib_ctx.get(), 2*req_in_flight, nullptr, nullptr, 0);
 	if (!ib_cq)
 		throw runtime_error("Failed to create IB CQ");
 
@@ -231,7 +231,7 @@ void CollectiveChannel::setup_ib_qp()
 			.max_send_sge = 1,
 			.max_recv_sge = 1
 		},
-		.qp_type = IBV_QPT_RC
+		.qp_type = IBV_QPT_UC
 	};
 
 	ib_qp = ibv_create_qp(ib_pd.get(), &qp_init_attr);
@@ -279,15 +279,12 @@ void CollectiveChannel::finalize_qp()
 	qp_attr.path_mtu = IBV_MTU_256;
 	qp_attr.dest_qp_num = fabric_qp;
 	qp_attr.rq_psn = 0;
-	qp_attr.max_dest_rd_atomic = 1;
-	qp_attr.min_rnr_timer = 0;
 
 	auto ret = ibv_modify_qp(
 		ib_qp.get(),
 		&qp_attr,
 		IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU |
-		IBV_QP_DEST_QPN | IBV_QP_RQ_PSN |
-		IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER);
+		IBV_QP_DEST_QPN | IBV_QP_RQ_PSN);
 
 	if (ret)
 		throw runtime_error("Failed to set IB QP to state RTR: " + to_string(ret));
@@ -296,17 +293,11 @@ void CollectiveChannel::finalize_qp()
 	qp_attr.qp_state = IBV_QPS_RTS;
 
 	qp_attr.sq_psn = 0;
-	qp_attr.max_rd_atomic = 1;
-	qp_attr.retry_cnt = 0;
-	qp_attr.rnr_retry = 0;
-	qp_attr.timeout = 0;
 
 	ret = ibv_modify_qp(
 		ib_qp.get(),
 		&qp_attr,
-		IBV_QP_STATE | IBV_QP_SQ_PSN |
-		IBV_QP_MAX_QP_RD_ATOMIC | IBV_QP_RETRY_CNT |
-		IBV_QP_RNR_RETRY | IBV_QP_TIMEOUT);
+		IBV_QP_STATE | IBV_QP_SQ_PSN);
 
 	if (ret)
 		throw runtime_error("Failed to set IB QP to state RTS: " + to_string(ret));

@@ -69,7 +69,10 @@ int main(int argc, char** argv)
 	}
 
 
-	const size_t cnt_rep = 1;
+	const size_t cnt_rep = 4;
+
+	/* Warm-up */
+	agg_group.allreduce(sbuf, dbuf, cnt_elem, mpitofino::datatype_t::INT32, 1);
 
 	auto t1 = get_mono_time();
 
