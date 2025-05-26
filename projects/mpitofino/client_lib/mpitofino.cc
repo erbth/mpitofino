@@ -439,9 +439,9 @@ void AggregationGroup::allreduce(
 	}
 
 
-	auto prof_endianess_1 = profiler_get("endianess_1", false);
-	auto prof_endianess_2 = profiler_get("endianess_2", false);
-	auto prof_io = profiler_get("io", false);
+	//auto prof_endianess_1 = profiler_get("endianess_1", false);
+	//auto prof_endianess_2 = profiler_get("endianess_2", false);
+	//auto prof_io = profiler_get("io", false);
 
 
 	/* Perform IO */
@@ -449,7 +449,7 @@ void AggregationGroup::allreduce(
 	size_t outstanding_reqs = 0;
 	size_t ring_pos = 0;
 
-	prof_io.start();
+	//prof_io.start();
 
 	while (send_pos < size || outstanding_reqs > 0)
 	{
@@ -469,8 +469,8 @@ void AggregationGroup::allreduce(
 				ring[ring_pos].size = to_send;
 
 
-				prof_io.stop();
-				prof_endianess_1.start();
+				//prof_io.stop();
+				//prof_endianess_1.start();
 
 				convert_endianess(
 					(const uint8_t*) sbuf + send_pos,
@@ -478,8 +478,8 @@ void AggregationGroup::allreduce(
 					to_send,
 					dtype);
 
-				prof_endianess_1.stop();
-				prof_io.start();
+				//prof_endianess_1.stop();
+				//prof_io.start();
 
 				send_pos += to_send;
 
@@ -556,8 +556,8 @@ void AggregationGroup::allreduce(
 
 
 				/* Endianess conversion of result */
-				prof_io.stop();
-				prof_endianess_2.start();
+				//prof_io.stop();
+				//prof_endianess_2.start();
 
 				convert_endianess(
 					ring[pos].recv_buf,
@@ -565,8 +565,8 @@ void AggregationGroup::allreduce(
 					ring[pos].size,
 					dtype);
 
-				prof_endianess_2.stop();
-				prof_io.start();
+				//prof_endianess_2.stop();
+				//prof_io.start();
 
 				/* Mark ring buffer entry as free */
 				ring[pos].status--;
@@ -575,7 +575,7 @@ void AggregationGroup::allreduce(
 		}
 	}
 
-	prof_io.stop();
+	//prof_io.stop();
 }
 
 

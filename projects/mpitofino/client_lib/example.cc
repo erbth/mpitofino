@@ -107,7 +107,7 @@ int main(int argc, char** argv)
 
 	printf("dt: %es, datasize: %eB, rate: %eB/s, latency: %es\n", dt, data_size, rate, latency);
 
-	profiler_list();
+	//profiler_list();
 
 	return match ? 0 : 1;
 }
