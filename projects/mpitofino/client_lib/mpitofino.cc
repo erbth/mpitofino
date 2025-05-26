@@ -1,3 +1,4 @@
+#include <immintrin.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -6,6 +7,7 @@
 #include <set>
 #include <regex>
 #include "common/com_utils.h"
+#include "common/profiler.h"
 #include "mpitofino.h"
 #include "client_lib_nd.pb.h"
 #include "ib_utils.h"
@@ -43,7 +45,13 @@ size_t get_datatype_element_size(datatype_t dtype)
 
 inline void convert_endianess_32(const uint32_t* src, uint32_t* dst, size_t count)
 {
-	for (size_t i = 0; i < count; i ++)
+	size_t i = 0;
+
+	if (((intptr_t) src) & 0x3 || ((intptr_t) dst) & 0x3)
+		throw runtime_error("uint32_t* not aligned to 4 bytes");
+	
+	/* Beginning of buffer until the dst pointer is 32 byte aligned */
+	for (; i < count && ((intptr_t) (dst + i)) & 0x1f; i++)
 	{
 		auto v = src[i];
 		dst[i] =
@@ -51,6 +59,38 @@ inline void convert_endianess_32(const uint32_t* src, uint32_t* dst, size_t coun
 			((v & 0xff00) << 8) |
 			((v & 0xff0000) >> 8) |
 			((v & 0xff000000) >> 24);
+	}
+
+	/* Fast write */
+	alignas(32) char _shuffle[32] = {
+		12, 13, 14, 15,  8, 9, 10, 11,  4, 5, 6, 7,  0, 1, 2, 3,
+		12, 13, 14, 15,  8, 9, 10, 11,  4, 5, 6, 7,  0, 1, 2, 3
+	};
+
+	auto shuffle = _mm256_load_si256((const __m256i*) _shuffle);
+
+	for (; i < count; i += 8)
+	{
+		/* pshufb */
+		auto in = _mm256_loadu_si256((const __m256i_u*) (src + i));
+		auto out = _mm256_shuffle_epi8(in, shuffle);
+		_mm256_stream_si256((__m256i_u*) (dst + i), out);
+	}
+
+	/* Remaining words */
+	if (i != count)
+	{
+		i -= 8;
+		
+		for (; i < count; i++)
+		{
+			auto v = src[i];
+			dst[i] =
+				((v & 0xff) << 24) |
+				((v & 0xff00) << 8) |
+				((v & 0xff0000) >> 8) |
+				((v & 0xff000000) >> 24);
+		}
 	}
 }
 
@@ -369,6 +409,7 @@ struct ring_elem_t
 
 	char* recv_buf{};
 	char* send_buf{};
+
 	size_t offset{};
 	size_t size{};
 };
@@ -381,89 +422,105 @@ void AggregationGroup::allreduce(
 	auto ch = get_channel(tag);
 
 	/* Exchange data */
-	/* Setup ring buffer */
 	size_t size = count * get_datatype_element_size(dtype);
 
-	memset(ch->ib_buf.ptr(), 0, ch->ib_buf.size());
+	/* Setup ring buffer */
+	size_t buf_size = ch->chunk_size * ch->req_in_flight;
 	auto send_buf = ch->ib_buf.ptr();
-	auto recv_buf = ch->ib_buf.ptr() + ch->chunk_size * ch->req_in_flight;
+	auto recv_buf = ch->ib_buf.ptr() + buf_size;
 
 	const size_t ring_size = ch->req_in_flight;
 	ring_elem_t ring[ring_size]{};
+
 	for (size_t i = 0; i < ring_size; i++)
 	{
-		ring[i].recv_buf = recv_buf + ch->chunk_size*i;
-		ring[i].send_buf = send_buf + ch->chunk_size*i;
+		ring[i].recv_buf = recv_buf + i*ch->chunk_size;
+		ring[i].send_buf = send_buf + i*ch->chunk_size;
 	}
 
 
+	auto prof_endianess_1 = profiler_get("endianess_1", false);
+	auto prof_endianess_2 = profiler_get("endianess_2", false);
+	auto prof_io = profiler_get("io", false);
+
+
+	/* Perform IO */
 	size_t send_pos = 0;
 	size_t outstanding_reqs = 0;
 	size_t ring_pos = 0;
 
+	prof_io.start();
+
 	while (send_pos < size || outstanding_reqs > 0)
 	{
 		/* Fill ring with new WRs */
-		while (send_pos < size)
+		if (send_pos < size)
 		{
 			size_t next = (ring_pos + 1) % ring_size;
-			if (ring[next].status)
-				break;
+			if (ring[next].status == 0)
+			{
+				auto to_send = min(ch->chunk_size, size - send_pos);
 
-			ring_pos = next;
-			ring[ring_pos].status = 2;
-			outstanding_reqs += 2;
+				ring_pos = next;
+				ring[ring_pos].status = 2;
+				outstanding_reqs += 2;
 
-			auto to_send = min(ch->chunk_size, size - send_pos);
-			ring[ring_pos].offset = send_pos;
-			ring[ring_pos].size = to_send;
+				ring[ring_pos].offset = send_pos;
+				ring[ring_pos].size = to_send;
 
-			/* Endianess conversion for send */
-			convert_endianess(
-				(const uint8_t*) sbuf + send_pos,
-				ring[ring_pos].send_buf,
-				to_send,
-				dtype);
 
-			send_pos += to_send;
+				prof_io.stop();
+				prof_endianess_1.start();
 
-			/* Post receive */
-			ibv_sge recv_sge = {
-				.addr = (uintptr_t) ring[ring_pos].recv_buf,
-				.length = (uint32_t) ch->chunk_size,
-				.lkey = ch->ib_mr->lkey
-			};
+				convert_endianess(
+					(const uint8_t*) sbuf + send_pos,
+					ring[ring_pos].send_buf,
+					to_send,
+					dtype);
 
-			ibv_recv_wr* recv_bad_wr;
-			ibv_recv_wr recv_wr = {
-				.wr_id = 0x1000 + ring_pos,
-				.sg_list = &recv_sge,
-				.num_sge = 1
-			};
+				prof_endianess_1.stop();
+				prof_io.start();
 
-			auto ret = ibv_post_recv(ch->ib_qp.get(), &recv_wr, &recv_bad_wr);
-			if (ret)
-				throw runtime_error("Failed to post IB receive WR: " + to_string(ret));
+				send_pos += to_send;
 
-			/* Post send */
-			ibv_sge send_sge = {
-				.addr = (uintptr_t) ring[ring_pos].send_buf,
-				.length = (uint32_t) ch->chunk_size,
-				.lkey = ch->ib_mr->lkey
-			};
+				/* Post receive */
+				ibv_sge recv_sge = {
+					.addr = (uintptr_t) ring[ring_pos].recv_buf,
+					.length = (uint32_t) ch->chunk_size,
+					.lkey = ch->ib_mr->lkey
+				};
 
-			ibv_send_wr* send_bad_wr = nullptr;
-			ibv_send_wr send_wr = {
-				.wr_id = 0x2000 + ring_pos,
-				.sg_list = &send_sge,
-				.num_sge = 1,
-				.opcode = IBV_WR_SEND,
-				.send_flags = IBV_SEND_SIGNALED
-			};
+				ibv_recv_wr* recv_bad_wr;
+				ibv_recv_wr recv_wr = {
+					.wr_id = 0x100000000 + ring_pos,
+					.sg_list = &recv_sge,
+					.num_sge = 1
+				};
 
-			ret = ibv_post_send(ch->ib_qp.get(), &send_wr, &send_bad_wr);
-			if (ret)
-				throw runtime_error("Failed to post IB send WR: " + to_string(ret));
+				auto ret = ibv_post_recv(ch->ib_qp.get(), &recv_wr, &recv_bad_wr);
+				if (ret)
+					throw runtime_error("Failed to post IB receive WR: " + to_string(ret));
+
+				/* Post send */
+				ibv_sge send_sge = {
+					.addr = (uintptr_t) ring[ring_pos].send_buf,
+					.length = (uint32_t) ch->chunk_size,
+					.lkey = ch->ib_mr->lkey
+				};
+
+				ibv_send_wr* send_bad_wr = nullptr;
+				ibv_send_wr send_wr = {
+					.wr_id = 0x200000000 + ring_pos,
+					.sg_list = &send_sge,
+					.num_sge = 1,
+					.opcode = IBV_WR_SEND,
+					.send_flags = IBV_SEND_SIGNALED
+				};
+
+				ret = ibv_post_send(ch->ib_qp.get(), &send_wr, &send_bad_wr);
+				if (ret)
+					throw runtime_error("Failed to post IB send WR: " + to_string(ret));
+			}
 		}
 
 
@@ -477,9 +534,9 @@ void AggregationGroup::allreduce(
 		{
 			auto& wc = wcs[i];
 
-			if (wc.wr_id >= 0x2000)
+			if (wc.wr_id >= 0x200000000)
 			{
-				auto pos = wc.wr_id - 0x2000;
+				auto pos = wc.wr_id - 0x200000000;
 
 				if (wc.status != IBV_WC_SUCCESS)
 					throw runtime_error("IB send failed: " + to_string(ret));
@@ -489,7 +546,7 @@ void AggregationGroup::allreduce(
 			}
 			else
 			{
-				auto pos = wc.wr_id - 0x1000;
+				auto pos = wc.wr_id - 0x100000000;
 
 				if (wc.status != IBV_WC_SUCCESS ||
 					(wc.byte_len != ch->chunk_size))
@@ -497,12 +554,19 @@ void AggregationGroup::allreduce(
 					throw runtime_error("IB recv failed: " + to_string(ret));
 				}
 
-				/* Endianess conversion of received data */
+
+				/* Endianess conversion of result */
+				prof_io.stop();
+				prof_endianess_2.start();
+
 				convert_endianess(
 					ring[pos].recv_buf,
 					(uint8_t*) dbuf + ring[pos].offset,
 					ring[pos].size,
 					dtype);
+
+				prof_endianess_2.stop();
+				prof_io.start();
 
 				/* Mark ring buffer entry as free */
 				ring[pos].status--;
@@ -510,6 +574,8 @@ void AggregationGroup::allreduce(
 			}
 		}
 	}
+
+	prof_io.stop();
 }
 
 

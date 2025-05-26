@@ -1,6 +1,7 @@
 add_library(mpitofino_int
 	mpitofino.cc
 	ib_utils.cc
+	../common/profiler.cc
 	"${CMAKE_CURRENT_BINARY_DIR}/proto_out/client_lib_nd.pb.cc"
 	"${CMAKE_CURRENT_BINARY_DIR}/proto_out/common.pb.cc"
 )
@@ -38,10 +39,13 @@ target_link_directories(mpitofino_int PUBLIC
 target_link_libraries(mpitofino_int PUBLIC
 	${PROTOBUF_LIBRARIES}
 	${LIBIBVERBS_LIBRARIES}
+	-fopenmp
 )
 
 set_target_properties(mpitofino_int PROPERTIES
 	POSITION_INDEPENDENT_CODE ON)
+
+target_compile_options(mpitofino_int PUBLIC -march=native -fopenmp)
 
 
 # Example application

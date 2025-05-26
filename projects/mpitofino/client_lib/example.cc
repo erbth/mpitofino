@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
+#include "common/profiler.h"
 #include "mpitofino.h"
 
 using namespace std;
@@ -105,6 +106,8 @@ int main(int argc, char** argv)
 	auto latency = dt / cnt_rep;
 
 	printf("dt: %es, datasize: %eB, rate: %eB/s, latency: %es\n", dt, data_size, rate, latency);
+
+	profiler_list();
 
 	return match ? 0 : 1;
 }
