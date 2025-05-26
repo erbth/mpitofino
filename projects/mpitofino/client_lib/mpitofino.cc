@@ -63,8 +63,8 @@ inline void convert_endianess_32(const uint32_t* src, uint32_t* dst, size_t coun
 
 	/* Fast write */
 	alignas(32) char _shuffle[32] = {
-		12, 13, 14, 15,  8, 9, 10, 11,  4, 5, 6, 7,  0, 1, 2, 3,
-		12, 13, 14, 15,  8, 9, 10, 11,  4, 5, 6, 7,  0, 1, 2, 3
+		3, 2, 1, 0,  7, 6, 5, 4,  11, 10, 9, 8,  15, 14, 13, 12,
+		3, 2, 1, 0,  7, 6, 5, 4,  11, 10, 9, 8,  15, 14, 13, 12
 	};
 
 	auto shuffle = _mm256_load_si256((const __m256i*) _shuffle);
