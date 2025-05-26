@@ -777,8 +777,7 @@ void ASICDriver::on_st_repo_channels()
 				*collectives_check_complete, *session, pipe_tgt,
 				*table_create_key<uint64_t, uint64_t, uint64_t, bool>(
 					collectives_check_complete,
-					table_field_desc_t<uint64_t>::create_ternary(
-						"meta.agg_unit", rc->agg_unit << 4, 0xfff0),
+					{"meta.agg_unit", rc->agg_unit},
 					table_field_desc_t<uint64_t>::create_ternary(
 						"meta.node_bitmap.low", full_bitmap_low[pipe], 0xffffffff),
 					table_field_desc_t<uint64_t>::create_ternary(
@@ -814,8 +813,7 @@ void ASICDriver::on_st_repo_channels()
 				*collectives_check_complete, *session, pipe_tgt,
 				*table_create_key<uint64_t, uint64_t, uint64_t, bool>(
 					collectives_check_complete,
-					table_field_desc_t<uint64_t>::create_ternary(
-						"meta.agg_unit", rc->agg_unit << 4, 0xfff0),
+					{"meta.agg_unit", rc->agg_unit},
 					table_field_desc_t<uint64_t>::create_ternary(
 						"meta.node_bitmap.low", 0, 0),
 					table_field_desc_t<uint64_t>::create_ternary(
@@ -937,11 +935,11 @@ void ASICDriver::on_st_repo_channels()
 			{
 				auto k = (*i).first;
 
-				uint64_t agg_unit{}, mask{};
-				check_bf_status(k->getValueandMask(field_id_check_complete, &agg_unit, &mask),
-								"k->getValueandMask");
+				uint64_t agg_unit{};
+				check_bf_status(k->getValue(field_id_check_complete, &agg_unit),
+								"k->getValu");
 
-				if (agg_units_in_use.find(agg_unit >> 4) == agg_units_in_use.end())
+				if (agg_units_in_use.find(agg_unit) == agg_units_in_use.end())
 				{
 					check_bf_status(collectives_check_complete->tableEntryDel(
 										*session, pipe_tgt, *k),
@@ -1144,7 +1142,7 @@ void ASICDriver::on_st_repo_channels()
 	/* clear registers */
 	for (auto k : agg_units_to_clear)
 	{
-		for (unsigned i = k << 4U; i < (k << 4U) + 16U; i++)
+		for (unsigned i = k << 8U; i < (k << 8U) + 256U; i++)
 		{
 			/* Agg unit value registers */
 			for (int j = 0; j < 32; j++)

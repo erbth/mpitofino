@@ -5,8 +5,8 @@ control AggregationUnit(
 	inout bit<32> b)
 {
 	/* 256 collective channels * 16 units/channel = 4096 values */
-	Register<value_pair_t, bit<12>>(4096, {0, 0}) values;
-	RegisterAction<value_pair_t, bit<12>, value_t>(values) value_int_32_add = {
+	Register<value_pair_t, bit<14>>(16384, {0, 0}) values;
+	RegisterAction<value_pair_t, bit<14>, value_t>(values) value_int_32_add = {
 		void apply(inout value_pair_t value, out value_t new_value) {
 			value.low = value.low + a;
 			value.high = value.high + b;
@@ -16,7 +16,7 @@ control AggregationUnit(
 	};
 
 	/* Will be called on the final recirculation */
-	RegisterAction<value_pair_t, bit<12>, value_t>(values) value_int_32_clear = {
+	RegisterAction<value_pair_t, bit<14>, value_t>(values) value_int_32_clear = {
 		void apply(inout value_pair_t value, out value_t new_value) {
 			new_value = value.high;
 
@@ -28,18 +28,18 @@ control AggregationUnit(
 
 	action agg_int_32_add() {
 		/* Aggregate and output low value */
-		a = value_int_32_add.execute((bit<12>) meta.agg_unit);
+		a = value_int_32_add.execute((bit<14>) meta.agg_unit);
 	}
 
 	action agg_int_32_clear() {
 		/* Output high value and clear */
-		b = value_int_32_clear.execute((bit<12>) meta.agg_unit);
+		b = value_int_32_clear.execute((bit<14>) meta.agg_unit);
 	}
 
 
 	table choose_action {
 		key = {
-			meta.agg_unit[15:4] : exact @name("meta.agg_unit");
+			meta.agg_unit[15:8] : exact @name("meta.agg_unit");
 			meta.agg_is_clear : exact;
 		}
 
@@ -106,31 +106,31 @@ control Collectives(
 	 * aggregation-node (switch). Note how the ALU restricts the final
 	 * comparison in such a way that we cannot use a 64bit low/high register
 	 * 'word-pair' and also read the result within one pipeline pass. */
-	Register<bit<32>, bit<12>>(4096, 0) state_bitmaps_low;
-	Register<bit<32>, bit<12>>(4096, 0) state_bitmaps_high;
+	Register<bit<32>, bit<14>>(16384, 0) state_bitmaps_low;
+	Register<bit<32>, bit<14>>(16384, 0) state_bitmaps_high;
 
-	RegisterAction<bit<32>, bit<12>, bit<32>>(state_bitmaps_low) update_bitmap_low = {
+	RegisterAction<bit<32>, bit<14>, bit<32>>(state_bitmaps_low) update_bitmap_low = {
 		void apply(inout bit<32> bitmap, out bit<32> new_bitmap) {
 			bitmap = bitmap | meta.node_bitmap.low;
 			new_bitmap = bitmap;
 		}
 	};
 
-	RegisterAction<bit<32>, bit<12>, bit<32>>(state_bitmaps_high) update_bitmap_high = {
+	RegisterAction<bit<32>, bit<14>, bit<32>>(state_bitmaps_high) update_bitmap_high = {
 		void apply(inout bit<32> bitmap, out bit<32> new_bitmap) {
 			bitmap = bitmap | meta.node_bitmap.high;
 			new_bitmap = bitmap;
 		}
 	};
 
-	RegisterAction<bit<32>, bit<12>, bit<32>>(state_bitmaps_low) clear_bitmap_low = {
+	RegisterAction<bit<32>, bit<14>, bit<32>>(state_bitmaps_low) clear_bitmap_low = {
 		void apply(inout bit<32> bitmap, out bit<32> new_bitmap) {
 			bitmap = 0;
 			new_bitmap = bitmap;
 		}
 	};
 
-	RegisterAction<bit<32>, bit<12>, bit<32>>(state_bitmaps_high) clear_bitmap_high = {
+	RegisterAction<bit<32>, bit<14>, bit<32>>(state_bitmaps_high) clear_bitmap_high = {
 		void apply(inout bit<32> bitmap, out bit<32> new_bitmap) {
 			bitmap = 0;
 			new_bitmap = bitmap;
@@ -139,11 +139,11 @@ control Collectives(
 
 
 	action tbl_update_bitmap_low_act() {
-		meta.node_bitmap.low = update_bitmap_low.execute((bit<12>) meta.agg_unit);
+		meta.node_bitmap.low = update_bitmap_low.execute((bit<14>) meta.agg_unit);
 	}
 
 	action tbl_update_bitmap_low_clear() {
-		clear_bitmap_low.execute((bit<12>) meta.agg_unit);
+		clear_bitmap_low.execute((bit<14>) meta.agg_unit);
 	}
 	
 	table tbl_update_bitmap_low {
@@ -169,11 +169,11 @@ control Collectives(
 
 
 	action tbl_update_bitmap_high_act() {
-		meta.node_bitmap.high = update_bitmap_high.execute((bit<12>) meta.agg_unit);
+		meta.node_bitmap.high = update_bitmap_high.execute((bit<14>) meta.agg_unit);
 	}
 
 	action tbl_update_bitmap_high_clear() {
-		clear_bitmap_high.execute((bit<12>) meta.agg_unit);
+		clear_bitmap_high.execute((bit<14>) meta.agg_unit);
 	}
 	
 	table tbl_update_bitmap_high {
@@ -225,7 +225,7 @@ control Collectives(
 
 	table check_complete {
 		key = {
-			meta.agg_unit : ternary;
+			meta.agg_unit[15:8] : exact @name("meta.agg_unit");
 			meta.node_bitmap.low : ternary;
 			meta.node_bitmap.high : ternary;
 			meta.agg_is_clear : exact;
@@ -245,17 +245,13 @@ control Collectives(
 	}
 
 
-	action no_agg_unit() {
-		ig_dprsr_md.drop_ctl = 1;
-	}
-
 	action select_agg_unit(bit<16> agg_unit,
 			bit<32> node_bitmap_low, bit<32> node_bitmap_high)
 	{
 		// Setup aggregation configuration
 		ig_dprsr_md.drop_ctl = 1;
 		meta.agg_have_unit = true;
-		meta.agg_unit = agg_unit[11:0] ++ hdr.roce.psn[3:0];
+		meta.agg_unit = agg_unit[7:0] ++ hdr.roce.psn[7:0];
 		meta.bridge_header.agg_unit = agg_unit;
 		meta.node_bitmap.low  = node_bitmap_low;
 		meta.node_bitmap.high = node_bitmap_high;
@@ -271,11 +267,11 @@ control Collectives(
 		}
 
 		actions = {
-			no_agg_unit;
 			select_agg_unit;
+			NoAction;
 		}
 
-		default_action = no_agg_unit;
+		default_action = NoAction;
 
 		size = 1024;
 	}
