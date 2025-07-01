@@ -65,13 +65,26 @@ e.g. for the prefix in the example (`/opt/openmpi`)
 Running applications will usually require specifying the prefix and an
 `LD_LIBRARY_PATH`. The latter is required s.t. the dynamic linker
 finds `libmpitofino`, which has not been installed and is not linked
-by absolute path by `autotools`. A typical command-line to run in my
+by absolute path by `autotools`. A typical command-line to run in our
 virtualized development environment might look like this (assuming
 that mpirun can be found; i.e. `/opt/openmpi/bin` is in `$PATH` for
 this example prefix):
 
 ```bash
 mpirun --host n01,n02,n03,n04 --prefix /opt/openmpi --mca pml ucx -x UCX_TLS=^ud,ud:aux --mca coll mtof,basic,libnbc -x LD_LIBRARY_PATH=/home/therb/projects/mpip4/projects/mpitofino/build/client_lib/ -x XDG_RUNTIME_DIR=/home/therb/.xdg_runtime_dir --tag-output $PWD/src/test-mpi
+```
+
+This needs to be executed on one of the nodes (e.g. `n01`). Additionally, the
+`test-mpi` MPI application needs to be compiled first in
+`/projects/microbenchmarks` by running (requires OpenMPI):
+
+```bash
+mkdir build
+cd build
+
+cmake ..
+
+make
 ```
 
 Note that the current working directory to execute this command was
@@ -86,3 +99,10 @@ it.
 
 The other `coll` mca components are required to implement the
 operations `mtof` does not provide.
+
+
+The same command on our real system may look like this:
+
+```bash
+mpirun --host wolpy12,wolpy13,wolpy14,wolpy15 --prefix $HOME/opt/openmpi --mca pml ucx --mca coll mtof,basic,libnbc -x LD_LIBRARY_PATH=$HOME/mpip4/projects/mpitofino/build/client_lib/ --tag-output $PWD/src/test-mpi
+```
