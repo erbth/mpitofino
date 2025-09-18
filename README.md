@@ -10,6 +10,8 @@ computing*, or *in-fabric computing*).
 In addition to the actual `mpitofino` software suite, it houses additional
 information and tools.
 
+It is available from [https://github.com/erbth/mpitofino](https://github.com/erbth/mpitofino).
+
 ## Repository structure
 
 ### evaluation
