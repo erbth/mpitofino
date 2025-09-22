@@ -1,5 +1,9 @@
 ==============================================================================
-The mpitofino Project is under the Apache License v2.0 with LLVM Exceptions.
+Except where noted differently, all files of the mpitofino Project are under
+the Apache License v2.0 with LLVM Exceptions and are subject to the following
+copyright statement:
+
+Copyright 2025 Thomas Erbesdobler <erbesdob@cit.tum.de>
 
 The "LLVM Exceptions" are additions to the terms of the Apache License v2.0 by
 the LLVM Project, which is available from https://llvm.org at the time of this
